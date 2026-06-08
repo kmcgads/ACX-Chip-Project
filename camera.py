@@ -7,7 +7,7 @@ import numpy as np
 
 
 class CameraInterface:
-    def __init__(self, camera_address: Union[int, str] = 0) -> None:
+    def __init__(self, camera_address: Union[int, str] = 1) -> None:
         self.camera_address = self._validate_camera_address(camera_address)
 
     @staticmethod
@@ -109,7 +109,7 @@ class CameraInterface:
 if __name__ == "__main__":
     print("Starting camera test...")
     try:
-        camera = CameraInterface(camera_address=0)
+        camera = CameraInterface(camera_address=1)
 
         print("Testing camera connection...")
         if camera.test_connection():
@@ -129,7 +129,5 @@ if __name__ == "__main__":
 
     except Exception as e:
         print(f"ERROR: {e}")
-
-        import cv2
 
                     
