@@ -93,6 +93,18 @@ def main():
         res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
         user_input = input(f"Drop 1 at row={5+i}, Drop 2 at row={105-i}")
 
+    time.sleep(2)  # pause before next movement
+
+    # Drop 1 (top, at row=55) moves left 50 pixels (col 105 to 55)
+    # Drop 2 (bottom, at row=55) moves right 50 pixels (col 5 to 55)
+    for i in range(51):
+        num_drops = 2
+        drops_array = (Drop * num_drops)(
+            Drop(10, 10, 55, 105 - i),   # drop 1 moves left, stays at row=55
+            Drop(10, 10, 55, 5 + i),     # drop 2 moves right, stays at row=55
+        )
+        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
+        user_input = input(f"Drop 1 at col={105-i}, Drop 2 at col={5+i}")
 
     # Shutdown
     res = microfluidics.SetPower(False)
