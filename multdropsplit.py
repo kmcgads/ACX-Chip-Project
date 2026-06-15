@@ -12,40 +12,144 @@ import time
 # Load library
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
 
-# Define structure Drop
+
 class Drop(Structure):
     _fields_ = [
         ("height", ctypes.c_int),
-        ("width", ctypes.c_int),
-        ("row", ctypes.c_int),
-        ("col", ctypes.c_int),
+        ("width",  ctypes.c_int),
+        ("row",    ctypes.c_int),
+        ("col",    ctypes.c_int),
     ]
 
+def activate(drops, debug_label=""):
+    """
+    Activate the given drops and print exactly what is being sent
+    to the device so we can verify every electrode coordinate.
+    """
+    n = len(drops)
+    arr = (Drop * n)(*drops)
+
+    # Print every drop being sent this call
+    print(f"\n--- ACTIVATE CALL: {debug_label} ---")
+    print(f"    Total drops sent to device: {n}")
+    for idx, d in enumerate(drops):
+        print(
+            f"    Drop[{idx}]: "
+            f"row={d.row}, col={d.col}, "
+            f"height={d.height}, width={d.width} "
+            f"| covers rows {d.row}–{d.row + d.height - 1}, "
+            f"cols {d.col}–{d.col + d.width - 1}"
+        )
+
+    microfluidics.ActivateElec(128, 128, n, arr)
+    time.sleep(0.5)
+
+# ── Constants ─────────────────────────────────────────────────
+MAIN_COL        = 5
+MAIN_H          = 10
+MAIN_W          = 15
+PIECE_START_COL = 30
+PIECE_START_W   = 10
+PIECE_END_W     = 5
+STRETCH_STEPS   = 25
+NECK_START      = MAIN_COL + MAIN_W
+PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55
+NECK_END        = PIECE_FINAL_COL - 1              # col=54
+
+def held_drops(held_rows):
+    drops = []
+    for r in held_rows:
+        drops.append(Drop(MAIN_H, MAIN_W,      r, MAIN_COL))
+        drops.append(Drop(MAIN_H, PIECE_END_W, r, PIECE_FINAL_COL))
+    return drops
+
+def split_and_move(row, label, held_rows):
+
+    # ── Step 1: Load initial drop ─────────────────────────────
+    activate(
+        held_drops(held_rows) + [Drop(MAIN_H, 20, row, MAIN_COL)],
+        debug_label=f"{label} LOAD"
+    )
+    input(f"{label} loaded -- 10 tall x 20 wide at row={row}")
+    time.sleep(2)
+
+    # ── Step 2: Stretch full drop wider ───────────────────────
+    for i in range(1, 16):
+        activate(
+            held_drops(held_rows) + [Drop(MAIN_H, 20 + i, row, MAIN_COL)],
+            debug_label=f"{label} STRETCH width={20+i}"
+        )
+        input(f"{label} stretching, width={20+i}")
+    time.sleep(2)
+
+    # ── Step 3: Pattern both drops ────────────────────────────
+    activate(
+        held_drops(held_rows) + [
+            Drop(MAIN_H, MAIN_W,        row, MAIN_COL),
+            Drop(MAIN_H, PIECE_START_W, row, PIECE_START_COL),
+        ],
+        debug_label=f"{label} SPLIT PATTERN"
+    )
+    input(f"{label} split -- main at col={MAIN_COL}, piece at col={PIECE_START_COL}")
+    time.sleep(2)
+
+    # ── Step 4: Move piece 25px right, pinching 10 → 5 wide ──
+    for i in range(1, STRETCH_STEPS + 1):
+        current_col   = PIECE_START_COL + i
+        current_width = round(PIECE_START_W - (PIECE_START_W - PIECE_END_W) * i / STRETCH_STEPS)
+        activate(
+            held_drops(held_rows) + [
+                Drop(MAIN_H, MAIN_W,        row, MAIN_COL),
+                Drop(MAIN_H, current_width, row, current_col),
+            ],
+            debug_label=f"{label} MOVE step={i} col={current_col} width={current_width}"
+        )
+        input(f"{label} step {i}/25 -- piece at col={current_col}, width={current_width}")
+    time.sleep(2)
+
+    input(f"{label} piece at col={PIECE_FINAL_COL} -- beginning deactivation")
+
+    # ── Step 5: Deactivate neck col by col ────────────────────
+    for release_col in range(NECK_END, NECK_START - 1, -1):
+        bridge_width = release_col - NECK_START
+
+        if bridge_width > 0:
+            activate(
+                held_drops(held_rows) + [
+                    Drop(MAIN_H, MAIN_W,       row, MAIN_COL),
+                    Drop(MAIN_H, bridge_width, row, NECK_START),
+                    Drop(MAIN_H, PIECE_END_W,  row, PIECE_FINAL_COL),
+                ],
+                debug_label=f"{label} DEACTIVATE col={release_col} bridge={bridge_width}"
+            )
+        else:
+            activate(
+                held_drops(held_rows) + [
+                    Drop(MAIN_H, MAIN_W,      row, MAIN_COL),
+                    Drop(MAIN_H, PIECE_END_W, row, PIECE_FINAL_COL),
+                ],
+                debug_label=f"{label} DEACTIVATE col={release_col} FINAL"
+            )
+
+        input(f"{label} col={release_col} released -- bridge={bridge_width}")
+
+    input(f"{label} fully split -- main col={MAIN_COL}, piece col={PIECE_FINAL_COL}")
+    time.sleep(1)
 
 
-# load function
-
-# Use function
 def main():
-    # initialization USB
     microfluidics.InitUSB()
-    add = 0
     res = microfluidics.OpenUSB()
     if res:
-        user_input = input("Open successfully: ")
+        input("Open successfully")
     else:
-        user_input = input("Open failed: ")
+        input("Open failed")
 
-    buffer_size = 256
-    buffer = (ctypes.c_uint8 * buffer_size)()
+    microfluidics.SetPower(True)
+    input("Power on completed")
 
-    res = microfluidics.SetPower(True)
-    user_input = input("Power on completed")
-
-   
-    # Voltage set to 75 on first three, 0 on the rest
-    res = microfluidics.SetVolt(75, 75, 75, 0, 0, 0, 0, 0, 0)
-    user_input = input("Setting voltage is completed")
+    microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
+    input("Voltage set")
 
     v1 = ctypes.c_int(1)
     v2 = ctypes.c_int(2)
@@ -56,140 +160,29 @@ def main():
     v7 = ctypes.c_int(7)
     v8 = ctypes.c_int(8)
     v9 = ctypes.c_int(9)
-    res = microfluidics.InquireVolt(ctypes.byref(v1), ctypes.byref(v2), ctypes.byref(v3), ctypes.byref(v4),
-                                   ctypes.byref(v5), ctypes.byref(v6), ctypes.byref(v7), ctypes.byref(v8),
-                                   ctypes.byref(v9))
-    print(res)
-    print(v1, v2, v3, v4, v5, v6, v7, v8, v9)
-
-    # Display current voltage settings clearly
-    print(f"Current voltage settings:")
-    print(f"  V1: {v1.value} | V2: {v2.value} | V3: {v3.value}")
-    print(f"  V4: {v4.value} | V5: {v5.value} | V6: {v6.value}")
-    print(f"  V7: {v7.value} | V8: {v8.value} | V9: {v9.value}")
-    user_input = input("Query voltage command completed")
-  # ── DROP 1 (top) ──────────────────────────────────────────────
-
-    # Load drop 1 at row=55, col=5
-    num_drops = 1
-    drops_array = (Drop * num_drops)(
-        Drop(20, 20, 55, 5),
+    microfluidics.InquireVolt(
+        ctypes.byref(v1), ctypes.byref(v2), ctypes.byref(v3),
+        ctypes.byref(v4), ctypes.byref(v5), ctypes.byref(v6),
+        ctypes.byref(v7), ctypes.byref(v8), ctypes.byref(v9)
     )
-    res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-    user_input = input("Drop 1 loaded at row=55 -- ready for splitting")
+    print(f"Voltages: {v1.value} {v2.value} {v3.value} {v4.value} {v5.value} {v6.value} {v7.value} {v8.value} {v9.value}")
+    input("Voltage query completed")
 
-    time.sleep(2)
+    # ── Drop 1: row=55 ────────────────────────────────────────
+    split_and_move(row=55, label="Drop 1 (row=55)", held_rows=[])
+    input("Drop 1 holding -- starting Drop 2")
 
-    # Stretch drop 1 to the right pixel by pixel
-    for i in range(1, 6):
-        num_drops = 1
-        drops_array = (Drop * num_drops)(
-            Drop(20, 20 + i, 55, 5),
-        )
-        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-        user_input = input(f"Drop 1 stretching, width={20+i}")
+    # ── Drop 2: row=105 ───────────────────────────────────────
+    split_and_move(row=105, label="Drop 2 (row=105)", held_rows=[55])
 
-    time.sleep(2)
+    input("Both drops split and holding")
 
-    # Split drop 1 into 15x15 main and 5x5 piece
-    num_drops = 2
-    drops_array = (Drop * num_drops)(
-        Drop(15, 15, 55, 5),
-        Drop(5, 5, 55, 21),
-    )
-    res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-    user_input = input("Drop 1 split -- 5x5 piece forming")
-
-    time.sleep(2)
-
-    # Move drop 1 5x5 piece to the right 30 pixels
-    for i in range(31):
-        num_drops = 2
-        drops_array = (Drop * num_drops)(
-            Drop(15, 15, 55, 5),
-            Drop(5, 5, 55, 21 + i),
-        )
-        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-        user_input = input(f"Drop 1 piece moving right, now at col={21+i}")
-
-    time.sleep(2)
-
-    # ── DROP 2 (bottom) ───────────────────────────────────────────
-
-    # Load drop 2 at row=85, col=5
-    num_drops = 1
-    drops_array = (Drop * num_drops)(
-        Drop(20, 20, 85, 5),
-    )
-    res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-    user_input = input("Drop 2 loaded at row=85 -- ready for splitting")
-
-    time.sleep(2)
-
-    # Stretch drop 2 to the right pixel by pixel
-    for i in range(1, 6):
-        num_drops = 1
-        drops_array = (Drop * num_drops)(
-            Drop(20, 20 + i, 85, 5),
-        )
-        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-        user_input = input(f"Drop 2 stretching, width={20+i}")
-
-    time.sleep(2)
-
-    # Split drop 2 into 15x15 main and 5x5 piece
-    num_drops = 2
-    drops_array = (Drop * num_drops)(
-        Drop(15, 15, 85, 5),
-        Drop(5, 5, 85, 21),
-    )
-    res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-    user_input = input("Drop 2 split -- 5x5 piece forming")
-
-    time.sleep(2)
-
-    # Move drop 2 5x5 piece to the right 30 pixels
-    for i in range(31):
-        num_drops = 2
-        drops_array = (Drop * num_drops)(
-            Drop(15, 15, 85, 5),
-            Drop(5, 5, 85, 21 + i),
-        )
-        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-        user_input = input(f"Drop 2 piece moving right, now at col={21+i}")
-
-    time.sleep(2)
-
-    # ── MIX ───────────────────────────────────────────────────────
-
-    # Move both 5x5 pieces toward each other vertically to mix
-    # piece 1 at row=55 moves down, piece 2 at row=85 moves up
-    # they meet at row=70
-    for i in range(16):
-        # move top piece down
-        num_drops = 1
-        drops_array = (Drop * num_drops)(
-            Drop(5, 5, 55 + i, 51),
-        )
-        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-
-        time.sleep(0.5)
-
-        # move bottom piece up
-        num_drops = 1
-        drops_array = (Drop * num_drops)(
-            Drop(5, 5, 85 - i, 51),
-        )
-        res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
-        user_input = input(f"Piece 1 at row={55+i}, Piece 2 at row={85-i}")
-
-    user_input = input("5x5 pieces have met and are mixing at row=70, col=51")
-
-    # Shutdown
-    res = microfluidics.SetPower(False)
-    user_input = input("Power off completed")
+    # ── Shutdown ──────────────────────────────────────────────
+    microfluidics.ActivateElec(128, 128, 0, None)
+    time.sleep(0.5)
+    microfluidics.SetPower(False)
+    input("Power off completed")
     microfluidics.CloseUSB()
-
 
 if __name__ == "__main__":
     main()
