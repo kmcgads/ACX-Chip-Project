@@ -7,7 +7,7 @@ import numpy as np
 
 
 class CameraInterface:
-    def __init__(self, camera_address: Union[int, str] = 1) -> None:
+    def __init__(self, camera_address: Union[int, str] = 0) -> None:
         self.camera_address = self._validate_camera_address(camera_address)
 
     @staticmethod
@@ -19,7 +19,7 @@ class CameraInterface:
 
     def _open_camera(self) -> cv2.VideoCapture:
         camera = cv2.VideoCapture(self.camera_address, cv2.CAP_DSHOW)
-        #camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         if not camera.isOpened():
             raise Exception("Unable to connect to camera")
         return camera
@@ -109,7 +109,7 @@ class CameraInterface:
 if __name__ == "__main__":
     print("Starting camera test...")
     try:
-        camera = CameraInterface(camera_address=1)
+        camera = CameraInterface(camera_address=0)
 
         print("Testing camera connection...")
         if camera.test_connection():
