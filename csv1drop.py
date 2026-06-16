@@ -1,9 +1,16 @@
+"""The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
+
+To use this chip, the user must purchase the hardware from ACX Instruments. ACX provides the required starter software and DLL files with the purchased device.
+
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. The placeholder below represents where the ACX-provided DLL would be loaded."""
+
 import ctypes
 import time
-import csv
-from ctypes import POINTER, c_int, c_void_p, Structure
+from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
+from typing import List
 
-microfluidics = ctypes.CDLL("C:\\Users\\klmcg\\Downloads\\ACX_pythonSDK v1.2 3\\ACX_pythonSDK\\windows\\DLLTest.dll")
+# Load library
+microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
 
 class Drop(Structure):
     _fields_ = [
