@@ -6,6 +6,7 @@ Because the DLL is proprietary company software, I cannot share the actual DLL f
 
 import ctypes
 import time
+import csv
 from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
 from typing import List
 
@@ -52,13 +53,12 @@ def startup_and_confirm_voltage():
 
     res_power = microfluidics.SetPower(True)
     print(f"SetPower result: {res_power}")
-    time.sleep(2)  # give power time to stabilize before setting voltage
+    time.sleep(2)
 
     res_volt = microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
     print(f"SetVolt result: {res_volt}")
-    time.sleep(1)  # give voltage time to settle before querying
+    time.sleep(1)
 
-    # ── Query voltage and confirm it matches what we set ──────
     v1 = ctypes.c_int(0)
     v2 = ctypes.c_int(0)
     v3 = ctypes.c_int(0)
@@ -80,7 +80,6 @@ def startup_and_confirm_voltage():
         f"V7={v7.value} V8={v8.value} V9={v9.value}"
     )
 
-    # ── Validate voltage actually matches what we intended ────
     expected = [45, 45, 45, 0, 0, 0, 0, 0, 0]
     actual   = [v1.value, v2.value, v3.value, v4.value,
                 v5.value, v6.value, v7.value, v8.value, v9.value]
@@ -100,7 +99,6 @@ def load_initial_drop():
     """
     Activates the starting electrode at row=5, col=5, size=10x10
     and holds it so the user can physically load the drop onto the chip.
-    Only runs after voltage has already been confirmed.
     """
     print("\n--- LOAD INITIAL DROP ---")
     print("Activating starting electrode: row=5, col=5, height=10, width=10")
@@ -124,7 +122,11 @@ def execute_csv(filepath=r"C:\Users\klmcg\Downloads\drop_movement_instructions.c
     """
     Reads the CSV and executes each row as an ActivateElec call.
     Skips the shutdown row -- handled separately at the end.
+    Returns the final drop position (height, width, row, col) so it
+    can be held in place after the sequence finishes.
     """
+    final_position = None
+
     with open(filepath, newline='') as csvfile:
         reader = csv.DictReader(csvfile)
 
@@ -155,6 +157,36 @@ def execute_csv(filepath=r"C:\Users\klmcg\Downloads\drop_movement_instructions.c
             microfluidics.ActivateElec(128, 128, num_drops, drops_array)
             time.sleep(0.3)
 
+            final_position = (height, width, r, col)
+
+    return final_position
+
+
+def hold_final_position(final_position):
+    """
+    Re-activates and holds the drop at its final position after
+    the CSV sequence completes. Waits for user input before
+    proceeding to shutdown.
+    """
+    if final_position is None:
+        print("No final position recorded -- skipping hold step")
+        return
+
+    height, width, row, col = final_position
+
+    print("\n--- HOLDING FINAL POSITION ---")
+    print(f"Holding drop at row={row}, col={col}, height={height}, width={width}")
+
+    num_drops = 1
+    drops_array = (Drop * num_drops)(
+        Drop(height, width, row, col),
+    )
+    res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
+    print(f"ActivateElec result: {res}")
+
+    print("Drop is being held in place at its final position.")
+    input("\n>>> Press Enter when ready to power off")
+
 
 def main():
     # ── Step 1: Startup and confirm voltage BEFORE anything else
@@ -166,10 +198,13 @@ def main():
     # ── Step 3: Run CSV movement sequence ───────────────────────
     print("\nLoading instructions from: C:\\Users\\klmcg\\Downloads\\drop_movement_instructions.csv")
     print("Starting electrode sequence...\n")
-    execute_csv()
+    final_position = execute_csv()
     print("\nCSV sequence complete -- all movement instructions executed")
 
-    # ── Step 4: Shutdown ─────────────────────────────────────────
+    # ── Step 4: Hold drop at final position until user is ready
+    hold_final_position(final_position)
+
+    # ── Step 5: Shutdown ─────────────────────────────────────────
     microfluidics.SetPower(False)
     input("Power off completed -- press Enter to close USB")
     microfluidics.CloseUSB()
