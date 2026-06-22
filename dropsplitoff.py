@@ -1,13 +1,12 @@
 """The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
-
-To use this chip, the user must purchase the hardware from ACX Instruments. ACX provides the required starter software and DLL files with the purchased device.
-
-Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. The placeholder below represents where the ACX-provided DLL would be loaded."""
+To use this chip, the user must purchase the hardware from ACX Instruments. 
+ACX provides the required starter software and DLL files with the purchased device.
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. 
+The placeholder below represents where the ACX-provided DLL would be loaded."""
 
 import ctypes
 import time
-from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
-from typing import List
+from ctypes import Structure
 
 # Load library
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
@@ -19,13 +18,14 @@ class Drop(Structure):
         ("row",    ctypes.c_int),
         ("col",    ctypes.c_int),
     ]
-
+"""activates loading spot for drops and sets how the electrodes should be 
+activated on the device in response to the code"""
 def activate(drops):
     n = len(drops)
     arr = (Drop * n)(*drops)
     microfluidics.ActivateElec(128, 128, n, arr)
     time.sleep(0.5)
-
+#Confirms USB connection with the device
 def main():
     microfluidics.InitUSB()
     res = microfluidics.OpenUSB()
@@ -33,10 +33,10 @@ def main():
         input("Open successfully")
     else:
         input("Open failed")
-
+    #Confirms power is bein supplied to device
     microfluidics.SetPower(True)
     input("Power on completed")
-
+    #Sets the voltage of 45 (high volt) for use
     microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
     input("Voltage set")
 
@@ -54,6 +54,7 @@ def main():
         ctypes.byref(v4), ctypes.byref(v5), ctypes.byref(v6),
         ctypes.byref(v7), ctypes.byref(v8), ctypes.byref(v9)
     )
+    #Prints voltage values to check them
     print(f"Voltages: {v1.value} {v2.value} {v3.value} {v4.value} {v5.value} {v6.value} {v7.value} {v8.value} {v9.value}")
     input("Voltage query completed")
 
@@ -67,13 +68,14 @@ def main():
     PIECE_END_W     = 5     # piece width at end of column movement (pinches to 5)
     STRETCH_STEPS   = 25    # piece moves 25 pixels to the right
 
-    # ── Step 1: Load initial drop ─────────────────────────────
+    """Step 1: Load initial drop"""
     # Height=10 to match the main drop form requested
     activate([Drop(MAIN_H, 20, DROP_ROW, MAIN_COL)])
+    #This print should be changed if the starting volume is changed to reflect it
     input(f"Drop loaded -- 10 rows tall, 20 wide at row={DROP_ROW} col={MAIN_COL}")
     time.sleep(2)
 
-    # ── Step 2: Stretch full drop wider before splitting ──────
+    """Step 2: Stretch full drop wider before splitting"""
     for i in range(1, 16):
         activate([Drop(MAIN_H, 20 + i, DROP_ROW, MAIN_COL)])
         input(f"Stretching drop, width={20+i}")
@@ -81,7 +83,7 @@ def main():
 
     # Drop now 10 tall x 35 wide, cols 5–39
 
-    # ── Step 3: Pattern both drops ────────────────────────────
+    """Step 3: Pattern both drops"""
     # Main:  10x15 at col=5  (cols 5–19)
     # Gap:   cols 20–29
     # Piece: 10x10 at col=30 (cols 30–39) -- starts wide before pinching
@@ -92,11 +94,10 @@ def main():
     input(f"Split initiated -- {MAIN_H}x{MAIN_W} main at col={MAIN_COL}, {MAIN_H}x{PIECE_START_W} piece at col={PIECE_START_COL}")
     time.sleep(2)
 
-    # ── Step 4: Move piece 25 pixels right, pinching from 10 wide to 5 wide ──
+    """Step 4: Move piece 25 pixels right, pinching from 10 wide to 5 wide"""
     # Over 25 steps, piece moves col=30 → col=55
     # Width shrinks from 10 → 5 evenly across the 25 steps
     # Each step: width = 10 - round(5 * i/25)  (goes from 10 down to 5)
-    #
     # Piece height stays at MAIN_H (10) so it stays aligned with main drop
     # Width reduction per step: 5 width units over 25 steps = 0.2 per step
     # We use round() so it steps down cleanly at even intervals
@@ -127,7 +128,7 @@ def main():
         f"beginning deactivation sweep from col={NECK_END} back to col={NECK_START}"
     )
 
-    # ── Step 5: Deactivate neck column by column ──────────────
+    """Step 5: Deactivate neck column by column"""
     # Sweep from col=54 (closest to piece) back to col=20 (closest to main)
     # Each step the bridge shrinks by 1 column on its right side
     # Bridge height = MAIN_H (10) to fully clear every row in that column
@@ -175,8 +176,7 @@ if __name__ == "__main__":
 """The code below is for a multiple drop split off so multiple pieces are splitting at once"""
 
 import ctypes
-from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
-from typing import List
+from ctypes import Structure
 import time
 
 # Load library
@@ -199,7 +199,7 @@ def activate(drops, debug_label=""):
     n = len(drops)
     arr = (Drop * n)(*drops)
 
-    # Print every drop being sent this call
+    # Print every drop being sent this call and ensure the electrodes are working
     print(f"\n--- ACTIVATE CALL: {debug_label} ---")
     print(f"    Total drops sent to device: {n}")
     for idx, d in enumerate(drops):
@@ -305,7 +305,6 @@ def split_and_move(row, label, held_rows):
 
     input(f"{label} fully split -- main col={MAIN_COL}, piece col={PIECE_FINAL_COL}")
     time.sleep(1)
-
 
 def main():
     microfluidics.InitUSB()
