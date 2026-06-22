@@ -1,14 +1,13 @@
 """The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
-
-To use this chip, the user must purchase the hardware from ACX Instruments. ACX provides the required starter software and DLL files with the purchased device.
-
-Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. The placeholder below represents where the ACX-provided DLL would be loaded."""
+To use this chip, the user must purchase the hardware from ACX Instruments. 
+ACX provides the required starter software and DLL files with the purchased device.
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. 
+The placeholder below represents where the ACX-provided DLL would be loaded."""
 
 import ctypes
 import time
 import csv
-from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
-from typing import List
+from ctypes import POINTER, c_int, c_void_p, Structure
 
 # Load library
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
@@ -83,7 +82,7 @@ def startup_and_confirm_voltage():
     expected = [45, 45, 45, 0, 0, 0, 0, 0, 0]
     actual   = [v1.value, v2.value, v3.value, v4.value,
                 v5.value, v6.value, v7.value, v8.value, v9.value]
-
+    #Helps to identify where the error is so it can be adjusted and fixed promptly
     if actual != expected:
         print("\n*** WARNING: voltage does not match what was set! ***")
         print(f"Expected: {expected}")
@@ -218,8 +217,7 @@ if __name__ == "__main__":
 import ctypes
 import time
 import csv
-from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
-from typing import List
+from ctypes import POINTER, c_int, c_void_p, Structure
 
 # Load library
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
