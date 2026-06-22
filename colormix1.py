@@ -1,16 +1,25 @@
 """The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
-
-To use this chip, the user must purchase the hardware from ACX Instruments. ACX provides the required starter software and DLL files with the purchased device.
-
-Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. The placeholder below represents where the ACX-provided DLL would be loaded."""
+To use this chip, the user must purchase the hardware from ACX Instruments.
+ACX provides the required starter software and DLL files with the purchased device.
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path.
+The placeholder below represents where the ACX-provided DLL would be loaded.
+"""
 
 import ctypes
-from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
-from typing import List
+from ctypes import POINTER, c_int, c_void_p, Structure
 import time
 
-# Load library
+# Load the ACX-provided DLL. Replace this path with the actual DLL location.
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
+
+# ── Argtypes -- tells ctypes the exact C signature of each DLL function ──
+# Without these, ctypes may mispack arguments and the DLL will behave incorrectly.
+microfluidics.SetPower.argtypes     = [ctypes.c_bool]
+microfluidics.SetVolt.argtypes      = [c_int] * 9
+microfluidics.InquireVolt.argtypes  = [POINTER(c_int)] * 9
+microfluidics.ActivateElec.argtypes = [c_int, c_int, c_int, c_void_p]
+microfluidics.ActivateElec.restype  = c_int
+
 
 class Drop(Structure):
     _fields_ = [
@@ -20,7 +29,19 @@ class Drop(Structure):
         ("col",    ctypes.c_int),
     ]
 
+
 def activate(drops, debug_label=""):
+    """
+    Sends a list of Drop objects to the device in a single ActivateElec call,
+    then sleeps 0.5s to allow the electrodes to settle.
+
+    Prints a detailed breakdown of every electrode region being activated
+    so each call can be verified against expected chip coordinates.
+
+    Args:
+        drops:       List of Drop objects to activate simultaneously.
+        debug_label: Short string identifying this call in the printed output.
+    """
     n = len(drops)
     arr = (Drop * n)(*drops)
     print(f"\n--- ACTIVATE CALL: {debug_label} ---")
@@ -36,28 +57,48 @@ def activate(drops, debug_label=""):
     microfluidics.ActivateElec(128, 128, n, arr)
     time.sleep(0.5)
 
-# ── Constants ─────────────────────────────────────────────────
-MAIN_COL        = 5
-MAIN_H          = 10
-MAIN_W          = 15
-PIECE_START_COL = 30
-PIECE_START_W   = 10
-PIECE_END_W     = 5
-STRETCH_STEPS   = 25
-NECK_START      = MAIN_COL + MAIN_W
-PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55
-NECK_END        = PIECE_FINAL_COL - 1              # col=54
 
-DROP1_ROW   = 55
-DROP2_ROW   = 105
-DROP3_ROW   = 10
+# ── Movement constants ────────────────────────────────────────
+# These define the fixed electrode geometry used by every split sequence.
+# All values are in electrode units on the 128x128 chip grid.
 
-# ── New shared meeting point for all three pieces ──────────────
-MEETING_ROW = 55
-MEETING_COL = 30
+MAIN_COL        = 5    # left edge of every main (reservoir) drop
+MAIN_H          = 10   # height of every drop region (rows)
+MAIN_W          = 15   # width of every main drop (cols 5–19)
+PIECE_START_COL = 30   # column where the piece first appears after split
+PIECE_START_W   = 10   # piece width at the moment of split
+PIECE_END_W     = 5    # piece width after pinching is complete
+STRETCH_STEPS   = 25   # number of steps the piece moves right during pinch
+NECK_START      = MAIN_COL + MAIN_W     # col=20 -- right edge of main drop
+PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55 -- final piece position
+NECK_END        = PIECE_FINAL_COL - 1              # col=54 -- rightmost neck column
+
+# ── Drop starting rows (one row per reservoir) ────────────────
+DROP1_ROW = 55   # reservoir for Drop 1
+DROP2_ROW = 105  # reservoir for Drop 2
+DROP3_ROW = 10   # reservoir for Drop 3
+
+# ── Meeting point where all three pieces converge ─────────────
+MEETING_ROW = 55   # row all pieces align to before moving left
+MEETING_COL = 30   # column all pieces travel to for the merge
 
 
 def held_drops(held_rows):
+    """
+    Builds the list of Drop objects needed to keep previously-split drops
+    held in place while a new split sequence runs.
+
+    For each row in held_rows, two drops are added:
+      - The main (reservoir) drop at MAIN_COL
+      - The piece drop at PIECE_FINAL_COL
+
+    Args:
+        held_rows: List of row values for drops that have already been split
+                   and must stay active.
+
+    Returns:
+        List of Drop objects to include in the next activate() call.
+    """
     drops = []
     for r in held_rows:
         drops.append(Drop(MAIN_H, MAIN_W,      r, MAIN_COL))
@@ -67,8 +108,15 @@ def held_drops(held_rows):
 
 def load_and_hold_drop(row, label, held_rows):
     """
-    Activates the starting 10x20 electrode for this drop and holds it
-    so the user can physically load the drop before stretching begins.
+    Activates the starting 10x20 electrode for a new drop and pauses
+    so the user can physically place the drop on the chip before the
+    stretch sequence begins. Any already-split drops in held_rows are
+    kept active at the same time.
+
+    Args:
+        row:       Chip row for the new drop's starting electrode.
+        label:     Human-readable name for this drop (used in print output).
+        held_rows: Rows of previously split drops to keep held.
     """
     activate(
         held_drops(held_rows) + [Drop(MAIN_H, 20, row, MAIN_COL)],
@@ -84,7 +132,7 @@ def split_and_move(row, label, held_rows):
     # ── Step 1: Load and hold for physical loading ────────────
     load_and_hold_drop(row, label, held_rows)
 
-    # ── Step 2: Stretch -- no input() inside loop ──────────────
+    # ── Step 2: Stretch ───────────────────────────────────────
     print(f"{label} stretching from width=20 to width=35...")
     for i in range(1, 16):
         activate(
@@ -105,7 +153,9 @@ def split_and_move(row, label, held_rows):
     input(f">>> {label} split patterned -- press Enter to move piece")
     time.sleep(2)
 
-    # ── Step 4: Move piece -- no input() inside loop ──────────
+    # ── Step 4: Move piece ────────────────────────────────────
+    # Piece travels right from col=30 to col=55 (25 steps).
+    # Width pinches linearly from PIECE_START_W (10) down to PIECE_END_W (5).
     print(f"{label} moving piece 25px right, pinching 10 → 5 wide...")
     for i in range(1, STRETCH_STEPS + 1):
         current_col   = PIECE_START_COL + i
@@ -121,7 +171,9 @@ def split_and_move(row, label, held_rows):
     input(f">>> {label} piece at col={PIECE_FINAL_COL} -- press Enter to begin deactivation")
     time.sleep(2)
 
-    # ── Step 5: Deactivate neck -- no input() inside loop ─────
+    # ── Step 5: Deactivate neck ───────────────────────────────
+    # Sweeps from col=54 back to col=20, shrinking the bridge by one
+    # column each step. When bridge_width hits 0 the drops are fully separate.
     print(f"{label} deactivating neck from col={NECK_END} to col={NECK_START}...")
     for release_col in range(NECK_END, NECK_START - 1, -1):
         bridge_width = release_col - NECK_START
@@ -136,6 +188,7 @@ def split_and_move(row, label, held_rows):
                 debug_label=f"{label} DEACTIVATE col={release_col} bridge={bridge_width}"
             )
         else:
+            # Bridge gone -- main and piece are now fully independent
             activate(
                 held_drops(held_rows) + [
                     Drop(MAIN_H, MAIN_W,      row, MAIN_COL),
@@ -151,72 +204,68 @@ def split_and_move(row, label, held_rows):
 
 def move_pieces_to_meet():
     """
-    All three pieces (10x5 each, located at row=55/105/10, col=55)
-    travel toward a single shared meeting point: row=55, col=30.
+    Moves all three pieces (10x5 each, at col=55) to a shared meeting
+    point at row=55, col=30, then merges them into one combined drop.
 
-    Drop 1 piece: starts row=55,  col=55 -- already on meeting row,
-                  just needs to move LEFT in columns to col=30
-    Drop 2 piece: starts row=105, col=55 -- needs to move UP in rows
-                  to row=55, then left in columns to col=30
-    Drop 3 piece: starts row=10,  col=55 -- needs to move DOWN in rows
-                  to row=55, then left in columns to col=30
+    Starting positions:
+      Drop 1 piece: row=55,  col=55 -- already on meeting row
+      Drop 2 piece: row=105, col=55 -- 50 rows above meeting row
+      Drop 3 piece: row=10,  col=55 -- 45 rows below meeting row
 
-    To keep all three moving together step-by-step and arriving at
-    the same time, we break this into two phases:
-      Phase A: drops 2 and 3 move row-wise to row=55 (drop 1 already there)
-      Phase B: all three move column-wise from col=55 to col=30
+    Phase A (row alignment):
+      Drop 2 moves up, Drop 3 moves down, both clamped at MEETING_ROW.
+      Drop 1 stays fixed. Loop runs for max(50, 45) = 50 steps so all
+      three arrive on MEETING_ROW at the same time (Drop 3 clamps 5 steps early).
+
+    Phase B (column convergence):
+      All three pieces are now on the same row and column, so they are
+      sent as one electrode region moving left from col=55 to col=30
+      (25 steps). Main drops remain held throughout both phases.
+
+    Merge:
+      A single combined drop of height MAIN_H*3 is activated at the
+      meeting point to represent the merged volume.
     """
-
     input(f"\n>>> All three drops split -- press Enter to move pieces toward "
           f"meeting point row={MEETING_ROW}, col={MEETING_COL}")
 
-    # ── Phase A: align all pieces onto row=55 ───────────────────
-    row_steps = abs(DROP2_ROW - MEETING_ROW)  # 105-55 = 50, same as 55-10=45 -- use the larger of the two
+    # ── Phase A: align all pieces onto MEETING_ROW ────────────
+    # Drop 2 is 50 rows away, Drop 3 is 45 rows away -- loop for the larger distance
     row_steps = max(abs(DROP2_ROW - MEETING_ROW), abs(MEETING_ROW - DROP3_ROW))  # 50
 
-    print(f"Phase A -- aligning all pieces onto row={MEETING_ROW}...")
+    print(f"Phase A -- aligning all pieces onto row={MEETING_ROW} ({row_steps} steps)...")
     for i in range(1, row_steps + 1):
-        # Drop 1 piece stays fixed -- already on meeting row
-        piece1_row = MEETING_ROW
-
-        # Drop 2 piece moves up from row=105 toward row=55
-        piece2_row = DROP2_ROW - i
-        if piece2_row < MEETING_ROW:
-            piece2_row = MEETING_ROW
-
-        # Drop 3 piece moves down from row=10 toward row=55
-        piece3_row = DROP3_ROW + i
-        if piece3_row > MEETING_ROW:
-            piece3_row = MEETING_ROW
+        piece2_row = max(DROP2_ROW - i, MEETING_ROW)  # moves up, clamps at MEETING_ROW
+        piece3_row = min(DROP3_ROW + i, MEETING_ROW)  # moves down, clamps at MEETING_ROW
 
         activate([
-            Drop(MAIN_H, MAIN_W,      DROP1_ROW, MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, piece1_row, PIECE_FINAL_COL),
-            Drop(MAIN_H, MAIN_W,      DROP2_ROW, MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, piece2_row, PIECE_FINAL_COL),
-            Drop(MAIN_H, MAIN_W,      DROP3_ROW, MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, piece3_row, PIECE_FINAL_COL),
+            Drop(MAIN_H, MAIN_W,      DROP1_ROW,   MAIN_COL),
+            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, PIECE_FINAL_COL),  # drop 1 piece stays on meeting row
+            Drop(MAIN_H, MAIN_W,      DROP2_ROW,   MAIN_COL),
+            Drop(MAIN_H, PIECE_END_W, piece2_row,  PIECE_FINAL_COL),
+            Drop(MAIN_H, MAIN_W,      DROP3_ROW,   MAIN_COL),
+            Drop(MAIN_H, PIECE_END_W, piece3_row,  PIECE_FINAL_COL),
         ],
-        debug_label=f"PHASE A step={i} piece1={piece1_row} piece2={piece2_row} piece3={piece3_row}"
+        debug_label=f"PHASE A step={i} piece2={piece2_row} piece3={piece3_row}"
         )
-        print(f"  piece1 row={piece1_row}, piece2 row={piece2_row}, piece3 row={piece3_row}")
+        print(f"  piece2 row={piece2_row}, piece3 row={piece3_row}")
 
     input(f">>> All three pieces aligned on row={MEETING_ROW} -- press Enter to begin column convergence")
     time.sleep(1)
 
-    # ── Phase B: move all three pieces left from col=55 to col=30 ─
+    # ── Phase B: move all three pieces left from col=55 to col=30
+    # All three pieces occupy the same row and col at this point,
+    # so they are sent as a single electrode region.
     col_steps = PIECE_FINAL_COL - MEETING_COL  # 55-30 = 25
 
-    print(f"Phase B -- moving all pieces left to col={MEETING_COL}...")
+    print(f"Phase B -- moving all pieces left to col={MEETING_COL} ({col_steps} steps)...")
     for i in range(1, col_steps + 1):
         current_col = PIECE_FINAL_COL - i
         activate([
             Drop(MAIN_H, MAIN_W,      DROP1_ROW,   MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, current_col),
             Drop(MAIN_H, MAIN_W,      DROP2_ROW,   MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, current_col),
             Drop(MAIN_H, MAIN_W,      DROP3_ROW,   MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, current_col),
+            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, current_col),  # one drop -- all three are at same position
         ],
         debug_label=f"PHASE B step={i} all pieces col={current_col}"
         )
@@ -225,7 +274,9 @@ def move_pieces_to_meet():
     input(f">>> All three pieces met at row={MEETING_ROW}, col={MEETING_COL} -- press Enter to merge")
     time.sleep(1)
 
-    # ── Merge into one combined drop ────────────────────────────
+    # ── Merge into one combined drop ──────────────────────────
+    # Height is MAIN_H*3 to represent the combined volume of all three pieces.
+    # Adjust this value if the hardware expects a different merged geometry.
     activate([
         Drop(MAIN_H,     MAIN_W,      DROP1_ROW,   MAIN_COL),
         Drop(MAIN_H,     MAIN_W,      DROP2_ROW,   MAIN_COL),
@@ -251,21 +302,9 @@ def main():
     microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
     input("Voltage set")
 
-    v1 = ctypes.c_int(1)
-    v2 = ctypes.c_int(2)
-    v3 = ctypes.c_int(3)
-    v4 = ctypes.c_int(4)
-    v5 = ctypes.c_int(5)
-    v6 = ctypes.c_int(6)
-    v7 = ctypes.c_int(7)
-    v8 = ctypes.c_int(8)
-    v9 = ctypes.c_int(9)
-    microfluidics.InquireVolt(
-        ctypes.byref(v1), ctypes.byref(v2), ctypes.byref(v3),
-        ctypes.byref(v4), ctypes.byref(v5), ctypes.byref(v6),
-        ctypes.byref(v7), ctypes.byref(v8), ctypes.byref(v9)
-    )
-    print(f"Voltages: {v1.value} {v2.value} {v3.value} {v4.value} {v5.value} {v6.value} {v7.value} {v8.value} {v9.value}")
+    voltages = [ctypes.c_int(0) for _ in range(9)]
+    microfluidics.InquireVolt(*[ctypes.byref(v) for v in voltages])
+    print("Voltages: " + " ".join(str(v.value) for v in voltages))
     input("Voltage query completed")
 
     # ── Drop 1: row=55 ────────────────────────────────────────
@@ -285,11 +324,12 @@ def main():
     input(">>> Sequence complete -- press Enter to shut down")
 
     # ── Shutdown ──────────────────────────────────────────────
-    microfluidics.ActivateElec(128, 128, 0, None)
+    microfluidics.ActivateElec(128, 128, 0, None)  # deactivate all electrodes
     time.sleep(0.5)
     microfluidics.SetPower(False)
     input("Power off completed")
     microfluidics.CloseUSB()
+
 
 if __name__ == "__main__":
     main()
