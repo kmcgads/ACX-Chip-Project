@@ -1,13 +1,15 @@
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import cv2
 import numpy as np
 
 
+"""Sets camera address so it can be found as an integer or string; you may have to try out a few dif values"""
 class CameraInterface:
     def __init__(self, camera_address: Union[int, str] = 0) -> None:
+        # Confirms that the camera address is right and sets it for the script
         self.camera_address = self._validate_camera_address(camera_address)
 
     @staticmethod
@@ -17,117 +19,116 @@ class CameraInterface:
         except (ValueError, TypeError):
             return camera_address
 
+    # Confirms camera existence and raises an error if there is a connection issue
     def _open_camera(self) -> cv2.VideoCapture:
         camera = cv2.VideoCapture(self.camera_address, cv2.CAP_DSHOW)
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+
+        # Keeps autofocus on by default
+        camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+
         if not camera.isOpened():
             raise Exception("Unable to connect to camera")
+
         return camera
 
-    def _close_camera(self, camera: cv2.VideoCapture) -> None:
+    # Releases the camera so other programs can use it
+    def _close_camera(self, camera) -> None:
         if camera is not None and camera.isOpened():
             camera.release()
 
-    def test_connection(self) -> bool:
-        try:
-            camera = self._open_camera()
-            self._close_camera(camera)
-            return True
-        except Exception:
-            return False
-
-    def take_picture(self, focus: Optional[int] = None, autofocus: Optional[bool] = None) -> Path:
+    # Code for actual picture to be taken
+    def take_picture(self) -> tuple[Path, np.ndarray]:
         camera = None
+
         try:
             camera = self._open_camera()
-            if focus is not None or autofocus is not None:
-                self._adjust_focus_settings_unlocked(camera, focus, autofocus)
+
+            # Reads one image from the connected camera
             success, frame = camera.read()
+
+            """Pathway that is in if there is an issue with the actual PIC being taken,
+            not just the connection to the camera"""
             if not success:
-                raise Exception("Unable to read from camera")
+                raise Exception("Unable to take picture")
+
+            # Names file of the pic taken under the microscope
             filename = datetime.now().strftime("microscope_%Y%m%d_%H%M%S.jpg")
             image_path = Path(filename)
+
+            # Saves the captured frame as an image file
             cv2.imwrite(str(image_path), frame)
-            return image_path
-        finally:
-            if camera is not None:
-                self._close_camera(camera)
 
+            # Returns both the saved image path and the actual frame so the same picture can be analyzed
+            return image_path, frame
+
+        finally:
+            # Releases the camera from use and takes away the USB connection at the end of the sequence
+            self._close_camera(camera)
+
+    """Uses the pic collected and gathers a hex color within a rectangle as defined by height and width
+    to be used in bayesian optimization later"""
     def get_average_color_from_rectangle(
-        self, x: int, y: int, width: int, height: int,
-        focus: Optional[int] = None, autofocus: Optional[bool] = None,
+        self,
+        frame: np.ndarray,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
     ) -> dict:
-        camera = None  
-        try:
-            camera = self._open_camera()
-            if focus is not None or autofocus is not None:
-                self._adjust_focus_settings_unlocked(camera, focus, autofocus)
-            success, frame = camera.read() 
-            if not success:
-                raise Exception("Unable to read from camera")
-            roi = frame[y:y + height, x:x + width]
-            if roi.size == 0:
-                raise ValueError("Rectangle is outside the image area")
-            avg_bgr = np.mean(roi, axis=(0, 1))
-            b, g, r = avg_bgr.astype(int)
-            hex_color = "#{:02x}{:02x}{:02x}".format(r, g, b)
-            return {"rgb": (r, g, b), "bgr": (b, g, r), "hex": hex_color}
-        finally:
-            if camera is not None:
-                self._close_camera(camera)
+        """Defines the frame size for what is being averaged and taken into account when the average hex color
+        is found, also ensures the rectangle is actually within the media being taken"""
 
-    def _adjust_focus_settings_unlocked(
-        self, camera: cv2.VideoCapture,
-        focus: Optional[int] = None, autofocus: Optional[bool] = None,
-    ) -> None:
-        if camera is None or not camera.isOpened():
-            raise Exception("Camera is not connected")
+        roi = frame[y:y + height, x:x + width]
 
-        focus_changed = False
+        if roi.size == 0:
+            raise ValueError("Unable to create a rectangle. Check x, y, width, and height values.")
 
-        if autofocus is not None:
-            current_autofocus = camera.get(cv2.CAP_PROP_AUTOFOCUS)
-            if current_autofocus != (1 if autofocus else 0):
-                camera.set(cv2.CAP_PROP_AUTOFOCUS, 1 if autofocus else 0)
-                focus_changed = True
+        """np is now taking the average color from each pixel within the previously defined rectangle"""
 
-        if not autofocus and focus is not None:
-            if focus < 0 or focus > 255:
-                raise ValueError("Focus value must be between 0 and 255.")
-            current_focus = camera.get(cv2.CAP_PROP_FOCUS)
-            if current_focus != focus:
-                camera.set(cv2.CAP_PROP_FOCUS, focus)
-                focus_changed = True
+        # Reshapes the rectangle into a list of individual BGR pixels
+        pixels = roi.reshape(-1, 3)
 
-        if focus_changed:
-            for _ in range(30):
-                camera.read()
-        else:
-            for _ in range(5):
-                camera.read()
+        # Finds the brightness of each pixel so glare and shadows can be removed
+        brightness = np.mean(pixels, axis=1)
 
+        # Removes very dark shadow pixels and very bright glare pixels
+        filtered_pixels = pixels[(brightness > 30) & (brightness < 240)]
+
+        # If the filter removes too much, use the original pixels instead
+        if len(filtered_pixels) == 0:
+            filtered_pixels = pixels
+
+        # Uses the median color instead of the mean so glare and shadows affect the result less
+        b, g, r = np.median(filtered_pixels, axis=0).astype(int)
+
+        # Produces hex color back
+        hex_color = "#{:02x}{:02x}{:02x}".format(r, g, b)
+
+        return {"rgb": (r, g, b), "bgr": (b, g, r), "hex": hex_color}
+
+#Outputs for what will be returned to the user while the script is running
 if __name__ == "__main__":
-    print("Starting camera test...")
+    print("Starting camera script...")
+
     try:
         camera = CameraInterface(camera_address=0)
 
-        print("Testing camera connection...")
-        if camera.test_connection():
-            print("Camera connected successfully.")
-        else:
-            print("Camera connection failed.")
-            exit()
-
         print("Taking picture...")
-        image_path = camera.take_picture()
+        image_path, frame = camera.take_picture()
         print(f"Picture saved to: {image_path}")
+        #Dimensions for the rectangle  being formed to take the average rgb
+        color_result = camera.get_average_color_from_rectangle(
+            frame=frame,
+            x=200,
+            y=150,
+            width=100,
+            height=100,
+        )
 
-        color_result = camera.get_average_color_from_rectangle(x=200, y=150, width=100, height=100)
         print(f"Average RGB color: {color_result['rgb']}")
         print(f"Average BGR color: {color_result['bgr']}")
         print(f"HEX color: {color_result['hex']}")
 
     except Exception as e:
         print(f"ERROR: {e}")
-
-                    
