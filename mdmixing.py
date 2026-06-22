@@ -1,16 +1,16 @@
 """The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
-
-To use this chip, the user must purchase the hardware from ACX Instruments. ACX provides the required starter software and DLL files with the purchased device.
-
-Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. The placeholder below represents where the ACX-provided DLL would be loaded."""
+To use this chip, the user must purchase the hardware from ACX Instruments.
+ACX provides the required starter software and DLL files with the purchased device.
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path.
+The placeholder below represents where the ACX-provided DLL would be loaded."""
 
 import ctypes
-from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
-from typing import List
+from ctypes import Structure
 import time
 
 # Load library
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
+
 
 class Drop(Structure):
     _fields_ = [
@@ -20,6 +20,7 @@ class Drop(Structure):
         ("col",    ctypes.c_int),
     ]
 
+#helps calla and activate electrodes using the set voltage and keeps track of drops
 def activate(drops, debug_label=""):
     n = len(drops)
     arr = (Drop * n)(*drops)
@@ -35,6 +36,7 @@ def activate(drops, debug_label=""):
         )
     microfluidics.ActivateElec(128, 128, n, arr)
     time.sleep(0.5)
+
 
 # ── Constants ─────────────────────────────────────────────────
 MAIN_COL        = 5
@@ -52,12 +54,14 @@ DROP1_ROW   = 55
 DROP2_ROW   = 105
 MEETING_ROW = (DROP1_ROW + DROP2_ROW) // 2        # row=80
 
+#Helps define how the maind rops should be held and kept during and after the split
 def held_drops(held_rows):
     drops = []
     for r in held_rows:
         drops.append(Drop(MAIN_H, MAIN_W,      r, MAIN_COL))
         drops.append(Drop(MAIN_H, PIECE_END_W, r, PIECE_FINAL_COL))
     return drops
+
 
 def split_and_move(row, label, held_rows):
 
@@ -67,19 +71,19 @@ def split_and_move(row, label, held_rows):
         debug_label=f"{label} LOAD"
     )
     input(f"\n>>> {label} loaded at row={row} -- press Enter to begin stretch")
-    time.sleep(2)
 
-    # ── Step 2: Stretch -- no input() inside loop ──────────────
+    # ── Step 2: Stretch ───────────────────────────────────────
     print(f"{label} stretching from width=20 to width=35...")
+    time.sleep(2)
     for i in range(1, 16):
         activate(
             held_drops(held_rows) + [Drop(MAIN_H, 20 + i, row, MAIN_COL)],
             debug_label=f"{label} STRETCH width={20+i}"
         )
     input(f">>> {label} fully stretched to width=35 -- press Enter to split")
-    time.sleep(2)
 
     # ── Step 3: Pattern both drops ────────────────────────────
+    time.sleep(2)
     activate(
         held_drops(held_rows) + [
             Drop(MAIN_H, MAIN_W,        row, MAIN_COL),
@@ -88,10 +92,10 @@ def split_and_move(row, label, held_rows):
         debug_label=f"{label} SPLIT PATTERN"
     )
     input(f">>> {label} split patterned -- press Enter to move piece")
-    time.sleep(2)
 
-    # ── Step 4: Move piece -- no input() inside loop ──────────
+    # ── Step 4: Move piece ────────────────────────────────────
     print(f"{label} moving piece 25px right, pinching 10 → 5 wide...")
+    time.sleep(2)
     for i in range(1, STRETCH_STEPS + 1):
         current_col   = PIECE_START_COL + i
         current_width = round(PIECE_START_W - (PIECE_START_W - PIECE_END_W) * i / STRETCH_STEPS)
@@ -104,10 +108,10 @@ def split_and_move(row, label, held_rows):
         )
         print(f"  {label} piece at col={current_col}, width={current_width}")
     input(f">>> {label} piece at col={PIECE_FINAL_COL} -- press Enter to begin deactivation")
-    time.sleep(2)
 
-    # ── Step 5: Deactivate neck -- no input() inside loop ─────
+    # ── Step 5: Deactivate neck ───────────────────────────────
     print(f"{label} deactivating neck from col={NECK_END} to col={NECK_START}...")
+    time.sleep(2)
     for release_col in range(NECK_END, NECK_START - 1, -1):
         bridge_width = release_col - NECK_START
 
@@ -140,28 +144,33 @@ def move_pieces_to_meet():
     input(f"\n>>> Both drops split -- press Enter to move pieces to meet at row={MEETING_ROW}")
 
     print(f"Moving pieces toward row={MEETING_ROW}...")
+    time.sleep(1)
     for i in range(1, steps_to_meet + 1):
         piece1_row = DROP1_ROW + i
         piece2_row = DROP2_ROW - i
-        activate([
-            Drop(MAIN_H, MAIN_W,      DROP1_ROW,  MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, piece1_row, PIECE_FINAL_COL),
-            Drop(MAIN_H, MAIN_W,      DROP2_ROW,  MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, piece2_row, PIECE_FINAL_COL),
-        ],
-        debug_label=f"MOVE TO MEET step={i} piece1={piece1_row} piece2={piece2_row}"
+        activate(
+            [
+                Drop(MAIN_H, MAIN_W,      DROP1_ROW,  MAIN_COL),
+                Drop(MAIN_H, PIECE_END_W, piece1_row, PIECE_FINAL_COL),
+                Drop(MAIN_H, MAIN_W,      DROP2_ROW,  MAIN_COL),
+                Drop(MAIN_H, PIECE_END_W, piece2_row, PIECE_FINAL_COL),
+            ],
+            debug_label=f"MOVE TO MEET step={i} piece1={piece1_row} piece2={piece2_row}"
         )
         print(f"  piece1 at row={piece1_row}, piece2 at row={piece2_row}")
 
     input(f">>> Pieces met at row={MEETING_ROW} -- press Enter to merge")
-    time.sleep(1)
 
-    activate([
-        Drop(MAIN_H,     MAIN_W,      DROP1_ROW,   MAIN_COL),
-        Drop(MAIN_H,     MAIN_W,      DROP2_ROW,   MAIN_COL),
-        Drop(MAIN_H * 2, PIECE_END_W, MEETING_ROW, PIECE_FINAL_COL),
-    ],
-    debug_label="MERGE combined drop at meeting row"
+    # Both pieces are now at MEETING_ROW. Merge into a single drop of the same
+    # footprint. Adjust MAIN_H here if the hardware expects a larger merged volume.
+    time.sleep(1)
+    activate(
+        [
+            Drop(MAIN_H, MAIN_W,     DROP1_ROW,   MAIN_COL),
+            Drop(MAIN_H, MAIN_W,     DROP2_ROW,   MAIN_COL),
+            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, PIECE_FINAL_COL),
+        ],
+        debug_label="MERGE combined drop at meeting row"
     )
     input(f">>> Drops merged at row={MEETING_ROW}, col={PIECE_FINAL_COL} -- press Enter to finish")
 
@@ -180,15 +189,15 @@ def main():
     microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
     input("Voltage set")
 
-    v1 = ctypes.c_int(1)
-    v2 = ctypes.c_int(2)
-    v3 = ctypes.c_int(3)
-    v4 = ctypes.c_int(4)
-    v5 = ctypes.c_int(5)
-    v6 = ctypes.c_int(6)
-    v7 = ctypes.c_int(7)
-    v8 = ctypes.c_int(8)
-    v9 = ctypes.c_int(9)
+    v1 = ctypes.c_int(0)
+    v2 = ctypes.c_int(0)
+    v3 = ctypes.c_int(0)
+    v4 = ctypes.c_int(0)
+    v5 = ctypes.c_int(0)
+    v6 = ctypes.c_int(0)
+    v7 = ctypes.c_int(0)
+    v8 = ctypes.c_int(0)
+    v9 = ctypes.c_int(0)
     microfluidics.InquireVolt(
         ctypes.byref(v1), ctypes.byref(v2), ctypes.byref(v3),
         ctypes.byref(v4), ctypes.byref(v5), ctypes.byref(v6),
@@ -196,7 +205,7 @@ def main():
     )
     print(f"Voltages: {v1.value} {v2.value} {v3.value} {v4.value} {v5.value} {v6.value} {v7.value} {v8.value} {v9.value}")
     input("Voltage query completed")
-
+    #Now the second drop starts splitting because the first drop is split and in position
     # ── Drop 1: row=55 ────────────────────────────────────────
     split_and_move(row=DROP1_ROW, label="Drop 1 (row=55)", held_rows=[])
     input(">>> Drop 1 holding -- press Enter to start Drop 2")
@@ -215,6 +224,7 @@ def main():
     microfluidics.SetPower(False)
     input("Power off completed")
     microfluidics.CloseUSB()
+
 
 if __name__ == "__main__":
     main()
