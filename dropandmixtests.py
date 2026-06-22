@@ -1,8 +1,8 @@
 """The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
-
-To use this chip, the user must purchase the hardware from ACX Instruments. ACX provides the required starter software and DLL files with the purchased device.
-
-Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. The placeholder below represents where the ACX-provided DLL would be loaded."""
+To use this chip, the user must purchase the hardware from ACX Instruments. 
+ACX provides the required starter software and DLL files with the purchased device.
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. 
+The placeholder below represents where the ACX-provided DLL would be loaded."""
 
 import ctypes
 from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
@@ -10,6 +10,8 @@ from typing import List
 
 # Load library
 microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
+"""This script relies on user input of the enter key to continue on after beginning the run to ensure for the best 
+possible quality for the drops and their movement."""
 
 # Define structure Drop
 class Drop(Structure):
@@ -21,11 +23,9 @@ class Drop(Structure):
     ]
 
 
-# load function
-
-# Use function
+# load function + use it
 def main():
-    # initialization USB
+    # initialization USB and confirms established connection
     microfluidics.InitUSB()
     add = 0
     res = microfluidics.OpenUSB()
@@ -33,13 +33,13 @@ def main():
         user_input = input("Open successfully: ")
     else:
         user_input = input("Open failed: ")
-
+    #Spares space in USB for device usage 
     buffer_size = 256
     buffer = (ctypes.c_uint8 * buffer_size)()
-
+    #Confirms power is being supplied to device
     res = microfluidics.SetPower(True)
     user_input = input("Power on completed")
-
+    #Sets device voltage of 45 (high volt) across the grid
     res = microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
     user_input = input("Setting voltage is completed")
 
@@ -55,11 +55,12 @@ def main():
     res = microfluidics.InquireVolt(ctypes.byref(v1), ctypes.byref(v2), ctypes.byref(v3), ctypes.byref(v4),
                                    ctypes.byref(v5), ctypes.byref(v6), ctypes.byref(v7), ctypes.byref(v8),
                                    ctypes.byref(v9))
+    #prints out voltages for confirmation
     print(res)
     print(v1, v2, v3, v4, v5, v6, v7, v8, v9)
     user_input = input("Query voltage command completed")
 
-    # Load and hold drop at starting position
+    # Load and hold drop at starting position before sequence starts
     num_drops = 1
     drops_array = (Drop * num_drops)(
         Drop(10, 10, 5, 5),)
@@ -120,7 +121,7 @@ def main():
         res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
         user_input = input("Drop moved down")
 
-    # Shutdown
+    # Shutdown and release drop from the grid
     res = microfluidics.SetPower(False)
     user_input = input("Power off completed")
     microfluidics.CloseUSB()
@@ -129,7 +130,8 @@ def main():
 if __name__ == "__main__":
     main()
 
-    """Below this is the code for the pathway of two drops that merge. This was the second test used. This is different from the above"""
+    """Below this is the code for the pathway of two drops that merge. 
+    This was the second test used. This is different from the above"""
 
 import ctypes
 from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
@@ -148,12 +150,9 @@ class Drop(Structure):
         ("col", ctypes.c_int),
     ]
 
-
-# load function
-
-# Use function
+# Load + use function
 def main():
-    # initialization USB
+    # initialization of USB to confirm connection
     microfluidics.InitUSB()
     add = 0
     res = microfluidics.OpenUSB()
@@ -161,13 +160,13 @@ def main():
         user_input = input("Open successfully: ")
     else:
         user_input = input("Open failed: ")
-
+    #Spares space in USB memory for communication with DM lite device
     buffer_size = 256
     buffer = (ctypes.c_uint8 * buffer_size)()
-
+    #Confirms power is being supplied to the device
     res = microfluidics.SetPower(True)
     user_input = input("Power on completed")
-
+    #Confirms voltage is set across the grid
     res = microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
     user_input = input("Setting voltage is completed")
 
@@ -183,6 +182,7 @@ def main():
     res = microfluidics.InquireVolt(ctypes.byref(v1), ctypes.byref(v2), ctypes.byref(v3), ctypes.byref(v4),
                                    ctypes.byref(v5), ctypes.byref(v6), ctypes.byref(v7), ctypes.byref(v8),
                                    ctypes.byref(v9))
+    #checks and confirms actual voltage
     print(res)
     print(v1, v2, v3, v4, v5, v6, v7, v8, v9)
     user_input = input("Query voltage command completed")
@@ -233,7 +233,7 @@ def main():
         res = microfluidics.ActivateElec(128, 128, num_drops, drops_array)
         user_input = input(f"Drop 1 at col={105-i}, Drop 2 at col={5+i}")
 
-    # Shutdown
+    # Shutdown of device and release of drops
     res = microfluidics.SetPower(False)
     user_input = input("Power off completed")
     microfluidics.CloseUSB()
