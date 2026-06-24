@@ -37,6 +37,20 @@ class CameraInterface:
         if camera is not None and camera.isOpened():
             camera.release()
 
+    def get_frame_size(self) -> tuple[int, int]:
+        """Returns the (width, height) of a captured frame in pixels."""
+        camera = None
+        try:
+            camera = self._open_camera()
+            ok, frame = camera.read()
+            if not ok:
+                raise Exception("Unable to read frame.")
+            h, w = frame.shape[:2]
+            print(f"Frame size: {w} px wide x {h} px tall")
+            return w, h
+        finally:
+            self._close_camera(camera)
+
     # Code for actual picture to be taken
     def take_picture(self) -> tuple[Path, np.ndarray]:
         camera = None
@@ -114,10 +128,13 @@ if __name__ == "__main__":
     try:
         camera = CameraInterface(camera_address=0)
 
+        frame_w, frame_h = camera.get_frame_size()
+
         print("Taking picture...")
         image_path, frame = camera.take_picture()
         print(f"Picture saved to: {image_path}")
-        #Dimensions for the rectangle  being formed to take the average rgb
+
+        #Dimensions for the rectangle being formed to take the average rgb
         color_result = camera.get_average_color_from_rectangle(
             frame=frame,
             x=200,
