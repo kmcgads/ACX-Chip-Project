@@ -1,4 +1,5 @@
-"""The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
+"""
+The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
 To use this chip, the user must purchase the hardware from ACX Instruments.
 ACX provides the required starter software and DLL files with the purchased device.
 Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path.
@@ -10,7 +11,7 @@ from ctypes import POINTER, c_int, c_void_p, Structure
 import time
 
 # Load the ACX-provided DLL. Replace this path with the actual DLL location.
-microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
+microfluidics = ctypes.CDLL("C:\\Users\\klmcg\\Downloads\\ACX_pythonSDK v1.2 3\\ACX_pythonSDK\\windows\\DLLTest.dll")
 
 # ── Argtypes -- tells ctypes the exact C signature of each DLL function ──
 # Without these, ctypes may mispack arguments and the DLL will behave incorrectly.
@@ -66,12 +67,12 @@ MAIN_COL        = 5    # left edge of every main (reservoir) drop
 MAIN_H          = 10   # height of every drop region (rows)
 MAIN_W          = 15   # width of every main drop (cols 5–19)
 PIECE_START_COL = 30   # column where the piece first appears after split
-PIECE_START_W   = 10   # piece width at the moment of split
+PIECE_START_W   = 20   # piece width at the moment of split (increased from 10 to match wider pre-stretch)
 PIECE_END_W     = 5    # piece width after pinching is complete
-STRETCH_STEPS   = 25   # number of steps the piece moves right during pinch
-NECK_START      = MAIN_COL + MAIN_W     # col=20 -- right edge of main drop
-PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55 -- final piece position
-NECK_END        = PIECE_FINAL_COL - 1              # col=54 -- rightmost neck column
+STRETCH_STEPS   = 35   # number of steps the piece moves right during pinch (increased from 25, +10 more stretch)
+NECK_START      = MAIN_COL + MAIN_W            # col=20 -- right edge of main drop
+PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=65 -- final piece position
+NECK_END        = PIECE_FINAL_COL - 1              # col=64 -- rightmost neck column
 
 # ── Drop starting rows (one row per reservoir) ────────────────
 DROP1_ROW = 55   # reservoir for Drop 1
@@ -133,16 +134,20 @@ def split_and_move(row, label, held_rows):
     load_and_hold_drop(row, label, held_rows)
 
     # ── Step 2: Stretch ───────────────────────────────────────
-    print(f"{label} stretching from width=20 to width=35...")
-    for i in range(1, 16):
+    # Stretches from width=20 to width=45 (25 steps, +10 more than before).
+    # The extra width creates more tension for a cleaner split.
+    print(f"{label} stretching from width=20 to width=45...")
+    for i in range(1, 26):
         activate(
             held_drops(held_rows) + [Drop(MAIN_H, 20 + i, row, MAIN_COL)],
             debug_label=f"{label} STRETCH width={20+i}"
         )
-    input(f">>> {label} fully stretched to width=35 -- press Enter to split")
+    input(f">>> {label} fully stretched to width=45 -- press Enter to split")
     time.sleep(2)
 
     # ── Step 3: Pattern both drops ────────────────────────────
+    # Main stays at cols 5–19 (width=15); piece appears at col=30, width=20
+    # (cols 30–49). The neck gap occupies cols 20–29.
     activate(
         held_drops(held_rows) + [
             Drop(MAIN_H, MAIN_W,        row, MAIN_COL),
@@ -154,9 +159,9 @@ def split_and_move(row, label, held_rows):
     time.sleep(2)
 
     # ── Step 4: Move piece ────────────────────────────────────
-    # Piece travels right from col=30 to col=55 (25 steps).
-    # Width pinches linearly from PIECE_START_W (10) down to PIECE_END_W (5).
-    print(f"{label} moving piece 25px right, pinching 10 → 5 wide...")
+    # Piece travels right from col=30 to col=65 (35 steps, +10 more than before).
+    # Width pinches linearly from PIECE_START_W (20) down to PIECE_END_W (5).
+    print(f"{label} moving piece {STRETCH_STEPS}px right, pinching {PIECE_START_W} → {PIECE_END_W} wide...")
     for i in range(1, STRETCH_STEPS + 1):
         current_col   = PIECE_START_COL + i
         current_width = round(PIECE_START_W - (PIECE_START_W - PIECE_END_W) * i / STRETCH_STEPS)
@@ -172,7 +177,7 @@ def split_and_move(row, label, held_rows):
     time.sleep(2)
 
     # ── Step 5: Deactivate neck ───────────────────────────────
-    # Sweeps from col=54 back to col=20, shrinking the bridge by one
+    # Sweeps from col=64 back to col=20, shrinking the bridge by one
     # column each step. When bridge_width hits 0 the drops are fully separate.
     print(f"{label} deactivating neck from col={NECK_END} to col={NECK_START}...")
     for release_col in range(NECK_END, NECK_START - 1, -1):
@@ -204,13 +209,13 @@ def split_and_move(row, label, held_rows):
 
 def move_pieces_to_meet():
     """
-    Moves all three pieces (10x5 each, at col=55) to a shared meeting
+    Moves all three pieces (10x5 each, at col=65) to a shared meeting
     point at row=55, col=30, then merges them into one combined drop.
 
     Starting positions:
-      Drop 1 piece: row=55,  col=55 -- already on meeting row
-      Drop 2 piece: row=105, col=55 -- 50 rows above meeting row
-      Drop 3 piece: row=10,  col=55 -- 45 rows below meeting row
+      Drop 1 piece: row=55,  col=65 -- already on meeting row
+      Drop 2 piece: row=105, col=65 -- 50 rows above meeting row
+      Drop 3 piece: row=10,  col=65 -- 45 rows below meeting row
 
     Phase A (row alignment):
       Drop 2 moves up, Drop 3 moves down, both clamped at MEETING_ROW.
@@ -219,8 +224,8 @@ def move_pieces_to_meet():
 
     Phase B (column convergence):
       All three pieces are now on the same row and column, so they are
-      sent as one electrode region moving left from col=55 to col=30
-      (25 steps). Main drops remain held throughout both phases.
+      sent as one electrode region moving left from col=65 to col=30
+      (35 steps). Main drops remain held throughout both phases.
 
     Merge:
       A single combined drop of height MAIN_H*3 is activated at the
@@ -253,10 +258,10 @@ def move_pieces_to_meet():
     input(f">>> All three pieces aligned on row={MEETING_ROW} -- press Enter to begin column convergence")
     time.sleep(1)
 
-    # ── Phase B: move all three pieces left from col=55 to col=30
+    # ── Phase B: move all three pieces left from col=65 to col=30 ──
     # All three pieces occupy the same row and col at this point,
     # so they are sent as a single electrode region.
-    col_steps = PIECE_FINAL_COL - MEETING_COL  # 55-30 = 25
+    col_steps = PIECE_FINAL_COL - MEETING_COL  # 65-30 = 35
 
     print(f"Phase B -- moving all pieces left to col={MEETING_COL} ({col_steps} steps)...")
     for i in range(1, col_steps + 1):
