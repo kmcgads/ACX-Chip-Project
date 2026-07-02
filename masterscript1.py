@@ -1,7 +1,7 @@
 """
-color_match_experiment.py
+masterscript1.py
 ──────────────────────────────────────────────────────────────────────────────
-8-trial Bayesian optimization experiment that mixes three CMY ink drops on a
+8-trial Bayesian optimization experiment that mixes three ink drops on a
 microfluidic chip to match a randomly chosen target color.
 
 Volume parameterization
@@ -10,9 +10,9 @@ The optimizer picks two continuous values in [0,1]² which are mapped through
 a 2-simplex bijection to produce three volume fractions (f_c, f_m, f_y) that
 always sum to 1.  Each fraction is then scaled to an electrode AREA:
 
-    area_c = round(f_c × MERGE_H × MERGE_W)      ← sum = 100 electrodes
-    area_m = round(f_m × MERGE_H × MERGE_W)
-    area_y = 100 − area_c − area_m               ← guaranteed ≥ 1 by clamping
+    area_a = round(f_a × MERGE_H × MERGE_W)      ← sum = 100 electrodes
+    area_b = round(f_b × MERGE_H × MERGE_W)
+    area_c = 100 − area_a − area_b               ← guaranteed ≥ 1 by clamping
 
 Each piece's HEIGHT and WIDTH are computed dynamically by vol_to_shape() —
 they are NOT preset.  Pieces are roughly square and always fit within the
@@ -80,17 +80,17 @@ VOLT_OFF = [0,  0,  0,  0, 0, 0, 0, 0, 0]
 
 # Stash drops: (name, home_row, home_col), all 20×20
 STASH = [
-    ("cyan",    4,   4),
-    ("magenta", 4,  56),
-    ("yellow",  4, 104),
+    ("ink_a", 4,   4),
+    ("ink_b", 4,  56),
+    ("ink_c", 4, 104),
 ]
 MAIN_H, MAIN_W = 20, 20
 
 # Reservoir wells for replenish — fluid moves from here to stash home
 RESERVOIRS = {
-    "cyan":    (0,   4),
-    "magenta": (0,  56),
-    "yellow":  (0, 104),
+    "ink_a": (0,   4),
+    "ink_b": (0,  56),
+    "ink_c": (0, 104),
 }
 
 # Merged drop target size — pieces always combine to exactly this
@@ -106,6 +106,11 @@ CAM_ROW,  CAM_COL  = 112, 52
 
 # Unload: slide drop from camera position off the bottom edge
 UNLOAD_ROW = 128    # one row past chip boundary — removes drop from grid
+
+# Split stretch: extra rows added to the downward stretch before patterning.
+# Creates more tension for a cleaner pinch-off (mirrors the +10 stretch in
+# the standalone three-drop split script).
+SPLIT_EXTRA = 10
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -159,7 +164,7 @@ def vol_to_shape(vol: int) -> tuple[int, int]:
 # Because the DLL is proprietary company software, I cannot share the actual
 # DLL file or its file path. The placeholder below represents where the
 # ACX-provided DLL would be loaded.
-_dll = ctypes.CDLL("path_to_ACX_provided_DLL")  # ← replace with actual DLL path
+_dll = ctypes.CDLL("path_from_ACX")
 
 
 class Drop(Structure):
@@ -301,17 +306,33 @@ def _stash_drops() -> list[Drop]:
 def step1_hold_stash(hold: HoldLoop) -> None:
     """
     Activate all three stash drops at home positions and hold them continuously.
-    Waits for the operator to confirm all colors are loaded before proceeding.
+
+    The HoldLoop is started immediately after the FIRST drop is activated so
+    the electrode is refreshed every 0.3 s during every input() wait.  Without
+    this, the chip's electrodes fade while the user is loading the next drop,
+    causing all drops after the first to appear not to hold.
+
+    Each iteration adds the new drop to the live hold set so all previously
+    loaded drops stay active while the next one is being placed.
     """
     print("[Step 1] Holding stash drops...")
     drops = _stash_drops()
-    for d in drops:
-        activate([d], f"HOLD ({d.row},{d.col})")
-    hold.set_drops(drops)
-    hold.start()
 
-    input("  Load cyan at (4,4), magenta at (4,56), yellow at (4,104) — press Enter when ready...")
-    print("  Stash held: cyan(4,4)  magenta(4,56)  yellow(4,104)\n")
+    for j, (name, s_row, s_col) in enumerate(STASH):
+        # Fire the electrode for all drops up to and including this one
+        activate(drops[:j + 1], f"HOLD {name} ({s_row},{s_col})")
+        # Hand the same list to the hold loop so it keeps refreshing
+        # the electrode during the input() wait below
+        hold.set_drops(drops[:j + 1])
+        if j == 0:
+            hold.start()   # begin continuous refresh after the first drop
+        input(f"  Load {name} at ({s_row},{s_col}) — press Enter when ready...")
+
+    # Loop already running with all three drops — no extra start() needed
+    print(f"  Stash held: "
+          f"ink_a({STASH[0][1]},{STASH[0][2]})  "
+          f"ink_b({STASH[1][1]},{STASH[1][2]})  "
+          f"ink_c({STASH[2][1]},{STASH[2][2]})\n")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -320,27 +341,34 @@ def step1_hold_stash(hold: HoldLoop) -> None:
 
 def step3_split_volumes(volumes: tuple[int, int, int], hold: HoldLoop) -> list[Drop]:
     """
-    Split one piece from each stash drop.
+    Split one piece from each stash drop using an extended stretch and gradual
+    neck deactivation for a cleaner, smoother separation.
 
-    Each piece is split DOWNWARD from the 20×20 stash drop:
-      1. Stretch the stash drop height down by piece_height rows (fluid bridge)
-      2. Pattern: activate stash at home + piece at the bottom of the bridge
-      3. Move piece step-by-step down to MERGE_ROW (same column as stash)
+    For each color the sequence is:
+      1. Stretch DOWN by piece_height + SPLIT_EXTRA rows — the extra 10 rows
+         create more surface tension before the split, mirroring the +10 stretch
+         from the standalone three-drop split script.
+      2. Pattern: main stays at home; piece appears SPLIT_EXTRA rows below the
+         main drop's bottom edge (not immediately adjacent).
+      3. Neck deactivation: contract the fluid bridge between main and piece
+         one row at a time, sweeping upward from the piece toward the main.
+         This is the vertical equivalent of the horizontal pinch-off in the
+         three-drop split script — it prevents the neck from snapping back and
+         gives a clean, controlled separation.
+      4. Walk piece down to MERGE_ROW, keeping the main drop and all previously
+         split pieces held throughout.
 
-    Piece dimensions come entirely from vol_to_shape(area_i) — neither height
-    nor width is hardcoded.  The three areas sum to MERGE_H × MERGE_W = 100,
-    so the pieces combine into exactly 10 × 10 when merged.
-
-    Returns three Drop objects, one per color, at row=MERGE_ROW and their
-    stash column, ready to be swept horizontally to MERGE_COL.
+    Returns three Drop objects at MERGE_ROW, one per color, ready to be swept
+    horizontally to MERGE_COL by step4_merge().
     """
     hold.stop()
     shapes = [vol_to_shape(v) for v in volumes]
     a_c, a_m, a_y = volumes
-    print(f"[Step 3] Splitting — cyan={a_c}el  magenta={a_m}el  yellow={a_y}el  "
+    print(f"[Step 3] Splitting — ink_a={a_c}el  ink_b={a_m}el  ink_c={a_y}el  "
           f"(total={a_c+a_m+a_y} electrodes = {MERGE_H}×{MERGE_W})")
     for (name, _, _), (ph, pw) in zip(STASH, shapes):
-        print(f"  {name}: shape {ph}h × {pw}w = {ph*pw} electrodes")
+        print(f"  {name}: shape {ph}h × {pw}w = {ph*pw} electrodes  "
+              f"(stretch: {MAIN_H}+{ph}+{SPLIT_EXTRA} = {MAIN_H+ph+SPLIT_EXTRA} rows total)")
 
     pieces: list[Drop] = []
 
@@ -349,20 +377,46 @@ def step3_split_volumes(volumes: tuple[int, int, int], hold: HoldLoop) -> list[D
                          for j, (_, r, c) in enumerate(STASH) if j != i]
         pieces_so_far = list(pieces)
         base          = other_stash + pieces_so_far
-        piece_row     = s_row + MAIN_H   # row immediately below stash drop
+        neck_top      = s_row + MAIN_H          # first row below the main drop
+        piece_row     = neck_top + SPLIT_EXTRA  # piece starts SPLIT_EXTRA rows below main
 
-        # 1. Stretch stash drop downward, one row at a time, to bridge the gap
-        for step in range(1, ph + 1):
+        # ── 1. Extended stretch ───────────────────────────────────────────
+        # Stretch ph + SPLIT_EXTRA rows down so the drop is fully elongated
+        # before the pattern step creates the separation.
+        total_stretch = ph + SPLIT_EXTRA
+        print(f"  {name}: stretching {MAIN_H} → {MAIN_H + total_stretch} rows...")
+        for step in range(1, total_stretch + 1):
             activate(base + [Drop(MAIN_H + step, MAIN_W, s_row, s_col)],
                      f"STRETCH {name} +{step}r")
 
-        # 2. Pattern: separate main body from the piece
+        # ── 2. Pattern ────────────────────────────────────────────────────
+        # Main stays at home; piece appears SPLIT_EXTRA rows below main,
+        # leaving a gap (the neck) between them.
         activate(base + [
-            Drop(MAIN_H, MAIN_W, s_row,    s_col),   # main stays at home
-            Drop(ph,     pw,     piece_row, s_col),   # piece below
+            Drop(MAIN_H, MAIN_W, s_row,    s_col),
+            Drop(ph,     pw,     piece_row, s_col),
         ], f"PATTERN {name}")
 
-        # 3. Walk piece downward to merge row; neck pinches and breaks naturally
+        # ── 3. Neck deactivation ──────────────────────────────────────────
+        # Contract the bridge between main and piece from SPLIT_EXTRA rows
+        # down to 0, sweeping upward one row at a time.  Each step shrinks
+        # the bridge height by 1, cleanly releasing the fluid connection.
+        print(f"  {name}: deactivating neck ({SPLIT_EXTRA} steps)...")
+        for bridge_h in range(SPLIT_EXTRA - 1, -1, -1):
+            if bridge_h > 0:
+                activate(base + [
+                    Drop(MAIN_H,   MAIN_W, s_row,    s_col),  # main held
+                    Drop(bridge_h, pw,     neck_top, s_col),  # shrinking bridge
+                    Drop(ph,       pw,     piece_row, s_col), # piece held
+                ], f"NECK {name} bridge={bridge_h}r")
+            else:
+                # Bridge gone — main and piece are now fully independent
+                activate(base + [
+                    Drop(MAIN_H, MAIN_W, s_row,    s_col),
+                    Drop(ph,     pw,     piece_row, s_col),
+                ], f"NECK {name} FINAL")
+
+        # ── 4. Walk piece down to merge row ──────────────────────────────
         _move(ph, pw, piece_row, s_col, MERGE_ROW, s_col,
               base + [Drop(MAIN_H, MAIN_W, s_row, s_col)],
               label=f"{name} piece -> merge row")
@@ -818,21 +872,21 @@ def random_target_color(seed: Optional[int] = None) -> ColorMeasurement:
 
 @dataclass
 class TrialRecord:
-    trial:          int
-    frac_cyan:      float
-    frac_magenta:   float
-    frac_yellow:    float
-    area_cyan:      int      # electrode area assigned to cyan
-    area_magenta:   int
-    area_yellow:    int
-    shape_cyan:     str      # e.g. "5×4" (height × width computed by vol_to_shape)
-    shape_magenta:  str
-    shape_yellow:   str
-    result_hex:     str
-    target_hex:     str
-    delta_e:        float
-    is_best:        bool
-    timestamp:      str = field(default_factory=lambda: datetime.now().isoformat())
+    trial:      int
+    frac_a:     float
+    frac_b:     float
+    frac_c:     float
+    area_a:     int      # electrode area assigned to ink_a
+    area_b:     int
+    area_c:     int
+    shape_a:    str      # e.g. "5×4" (height × width computed by vol_to_shape)
+    shape_b:    str
+    shape_c:    str
+    result_hex: str
+    target_hex: str
+    delta_e:    float
+    is_best:    bool
+    timestamp:  str = field(default_factory=lambda: datetime.now().isoformat())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -856,7 +910,7 @@ def run_experiment(target: ColorMeasurement, camera: cv2.VideoCapture) -> None:
     best_fracs                 = (1/3, 1/3, 1/3)
 
     print("=" * 62)
-    print("  CMY Color Match Experiment")
+    print("  Color Match Experiment")
     print(f"  Target  : {target}")
     print(f"  Trials  : up to {N_TRIALS}  "
           f"({N_INITIAL_POINTS} random + {N_TRIALS-N_INITIAL_POINTS} GP-guided)")
@@ -889,10 +943,10 @@ def run_experiment(target: ColorMeasurement, camera: cv2.VideoCapture) -> None:
         f_c, f_m, f_y = map_to_simplex(suggestion[0], suggestion[1])
         a_c, a_m, a_y = fractions_to_areas(f_c, f_m, f_y)
         (hc, wc), (hm, wm), (hy, wy) = vol_to_shape(a_c), vol_to_shape(a_m), vol_to_shape(a_y)
-        print(f"[Step 2] Fractions — cyan={f_c:.3f}  magenta={f_m:.3f}  yellow={f_y:.3f}")
-        print(f"         Areas    — cyan={a_c}  magenta={a_m}  yellow={a_y}  "
+        print(f"[Step 2] Fractions — ink_a={f_c:.3f}  ink_b={f_m:.3f}  ink_c={f_y:.3f}")
+        print(f"         Areas    — ink_a={a_c}  ink_b={a_m}  ink_c={a_y}  "
               f"(sum={a_c+a_m+a_y} = {MERGE_H}×{MERGE_W})")
-        print(f"         Shapes   — cyan={hc}×{wc}  magenta={hm}×{wm}  yellow={hy}×{wy}")
+        print(f"         Shapes   — ink_a={hc}×{wc}  ink_b={hm}×{wm}  ink_c={hy}×{wy}")
 
         # ── Step 3: split ──────────────────────────────────────────────────
         pieces = step3_split_volumes((a_c, a_m, a_y), hold)
@@ -919,9 +973,9 @@ def run_experiment(target: ColorMeasurement, camera: cv2.VideoCapture) -> None:
         optimizer.tell(suggestion, de)
         history.append(TrialRecord(
             trial=trial,
-            frac_cyan=f_c, frac_magenta=f_m, frac_yellow=f_y,
-            area_cyan=a_c, area_magenta=a_m, area_yellow=a_y,
-            shape_cyan=f"{hc}×{wc}", shape_magenta=f"{hm}×{wm}", shape_yellow=f"{hy}×{wy}",
+            frac_a=f_c, frac_b=f_m, frac_c=f_y,
+            area_a=a_c, area_b=a_m, area_c=a_y,
+            shape_a=f"{hc}×{wc}", shape_b=f"{hm}×{wm}", shape_c=f"{hy}×{wy}",
             result_hex=result.hex, target_hex=target.hex,
             delta_e=de, is_best=is_best,
         ))
@@ -946,9 +1000,9 @@ def run_experiment(target: ColorMeasurement, camera: cv2.VideoCapture) -> None:
     print("  EXPERIMENT COMPLETE")
     print(f"  Best dE   : {best_de:.2f}  "
           + ("(visually identical)" if best_de < 2.0 else ""))
-    print(f"  Best fracs: cyan={best_fracs[0]:.3f}  "
-          f"magenta={best_fracs[1]:.3f}  yellow={best_fracs[2]:.3f}")
-    print(f"  Best areas: cyan={best_areas[0]}  magenta={best_areas[1]}  yellow={best_areas[2]}  "
+    print(f"  Best fracs: ink_a={best_fracs[0]:.3f}  "
+          f"ink_b={best_fracs[1]:.3f}  ink_c={best_fracs[2]:.3f}")
+    print(f"  Best areas: ink_a={best_areas[0]}  ink_b={best_areas[1]}  ink_c={best_areas[2]}  "
           f"(sum={sum(best_areas)})")
     for (name, _, _), (h, w) in zip(STASH, best_shapes):
         print(f"  Best shape {name}: {h}h × {w}w = {h*w} electrodes")
@@ -962,11 +1016,11 @@ def run_experiment(target: ColorMeasurement, camera: cv2.VideoCapture) -> None:
         json.dump({
             "target":        str(target),
             "best_delta_e":  best_de,
-            "best_fracs":    {"cyan": best_fracs[0], "magenta": best_fracs[1], "yellow": best_fracs[2]},
-            "best_areas":    {"cyan": best_areas[0], "magenta": best_areas[1], "yellow": best_areas[2]},
-            "best_shapes":   {"cyan": f"{best_shapes[0][0]}×{best_shapes[0][1]}",
-                              "magenta": f"{best_shapes[1][0]}×{best_shapes[1][1]}",
-                              "yellow": f"{best_shapes[2][0]}×{best_shapes[2][1]}"},
+            "best_fracs":    {"ink_a": best_fracs[0], "ink_b": best_fracs[1], "ink_c": best_fracs[2]},
+            "best_areas":    {"ink_a": best_areas[0], "ink_b": best_areas[1], "ink_c": best_areas[2]},
+            "best_shapes":   {"ink_a": f"{best_shapes[0][0]}×{best_shapes[0][1]}",
+                              "ink_b": f"{best_shapes[1][0]}×{best_shapes[1][1]}",
+                              "ink_c": f"{best_shapes[2][0]}×{best_shapes[2][1]}"},
             "converged":     converged,
             "n_trials_run":  len(history),
             "history":       [asdict(r) for r in history],
@@ -997,3 +1051,4 @@ if __name__ == "__main__":
     finally:
         cap.release()
         shutdown()
+        
