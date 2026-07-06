@@ -177,6 +177,7 @@ class Drop(Structure):
     ]
 
 
+
 _dll.SetPower.argtypes     = [ctypes.c_bool]
 _dll.SetVolt.argtypes      = [c_int] * 9
 _dll.InquireVolt.argtypes  = [POINTER(c_int)] * 9
