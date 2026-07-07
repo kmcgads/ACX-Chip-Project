@@ -32,9 +32,7 @@ import threading
 import time
 
 # Load the ACX-provided DLL. Replace this path with the actual DLL location.
-microfluidics = ctypes.CDLL(
-    "C:\\Users\\klmcg\\Downloads\\ACX_pythonSDK v1.2 3\\ACX_pythonSDK\\windows\\DLLTest.dll"
-)
+microfluidics = ctypes.CDLL(path_from_acx)
 
 # ── Argtypes ──────────────────────────────────────────────────────────────────
 microfluidics.SetPower.argtypes     = [ctypes.c_bool]
