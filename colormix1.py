@@ -52,7 +52,7 @@ class Drop(Structure):
 
 
 # ── Movement constants ────────────────────────────────────────────────────────
-MAIN_COL        = 5    # left edge of every main (reservoir) drop
+MAIN_COL        = 2    # left edge of every main (reservoir) drop
 MAIN_H          = 10   # height of every drop region (rows)
 MAIN_W          = 15   # width of every main drop (cols 5–19)
 PIECE_START_COL = 30   # column where the piece first appears after split
@@ -70,7 +70,7 @@ STRETCH_TARGET  = 45   # width at end of stretch (was 35)
 STRETCH_RANGE   = STRETCH_TARGET - LOAD_W   # 25 steps
 
 DROP1_ROW = 55
-DROP2_ROW = 105
+DROP2_ROW = 85
 DROP3_ROW = 10
 
 MEETING_ROW = 55
