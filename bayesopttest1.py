@@ -1,13 +1,5 @@
-"""
-bayesian_color_optimizer.py
-Bayesian optimization over CMY ink volumes to match a target color.
-TEST_MODE = True  → dry-run, no hardware needed.
-"""
-
-from __future__ import annotations
-
 import json
-import random
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -18,6 +10,11 @@ import cv2
 import numpy as np
 from skopt import Optimizer
 from skopt.space import Real
+
+sys.path.append("C:\\Users\\klmcg\\SULIProj\\ACX-CHIP-PROJECT")
+import colormix1
+
+MAX_PIECE_WIDTH = 25   # electrode widths map to this maximum
 
 
 # ── Data classes ───────────────────────────────────────────────────────────────
@@ -64,10 +61,9 @@ class OptimizationResult:
     log_path:     Optional[Path]
 
 
-# ── CIEDE2000 color distance ───────────────────────────────────────────────────
+# ── CIEDE2000 ──────────────────────────────────────────────────────────────────
 
 def ciede2000(lab1: np.ndarray, lab2: np.ndarray) -> float:
-    """Full CIEDE2000 perceptual color difference (L in [0, 100])."""
     L1, a1, b1 = float(lab1[0]), float(lab1[1]), float(lab1[2])
     L2, a2, b2 = float(lab2[0]), float(lab2[1]), float(lab2[2])
 
@@ -129,25 +125,22 @@ def _opencv_lab_to_standard(ocv_lab: np.ndarray) -> np.ndarray:
     return np.array([ocv_lab[0] / 2.55, float(ocv_lab[1]) - 128.0, float(ocv_lab[2]) - 128.0], dtype=np.float64)
 
 
-# ── Camera interface ───────────────────────────────────────────────────────────
+# ── Camera ─────────────────────────────────────────────────────────────────────
 
 class CameraError(RuntimeError):
     pass
 
 
 class CameraInterface:
-    """Thin wrapper around cv2.VideoCapture. Use as a context manager."""
-
     def __init__(self, camera_address: Union[int, str] = 0, warmup_frames: int = 15,
-                 measure_frames: int = 5, roi_margin: int = 5, lock_camera_settings: bool = True):
+                 measure_frames: int = 5, roi_margin: int = 5):
         try:
             self.camera_address = int(camera_address)
         except (ValueError, TypeError):
             self.camera_address = camera_address
-        self.warmup_frames        = warmup_frames
-        self.measure_frames       = measure_frames
-        self.roi_margin           = roi_margin
-        self.lock_camera_settings = lock_camera_settings
+        self.warmup_frames  = warmup_frames
+        self.measure_frames = measure_frames
+        self.roi_margin     = roi_margin
         self._camera: Optional[cv2.VideoCapture] = None
 
     def __enter__(self):
@@ -161,11 +154,10 @@ class CameraInterface:
             return
         cam = cv2.VideoCapture(self.camera_address, cv2.CAP_DSHOW)
         cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        cam.set(cv2.CAP_PROP_AUTOFOCUS, 0)
         if not cam.isOpened():
             raise CameraError(f"Unable to open camera at '{self.camera_address}'")
-        if self.lock_camera_settings:
-            cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-            cam.set(cv2.CAP_PROP_AUTOFOCUS, 0)
         for _ in range(self.warmup_frames):
             cam.read()
         self._camera = cam
@@ -174,16 +166,6 @@ class CameraInterface:
         if self._camera is not None and self._camera.isOpened():
             self._camera.release()
         self._camera = None
-
-    def set_focus(self, focus: int, autofocus: bool = False):
-        self._require_open()
-        self._camera.set(cv2.CAP_PROP_AUTOFOCUS, 1 if autofocus else 0)
-        if not autofocus and focus is not None:
-            if not (0 <= focus <= 255):
-                raise ValueError(f"Focus must be in [0, 255], got {focus}.")
-            self._camera.set(cv2.CAP_PROP_FOCUS, focus)
-        for _ in range(30):
-            self._camera.read()
 
     def get_average_color_from_rectangle(self, x: int, y: int, width: int, height: int) -> ColorMeasurement:
         self._require_open()
@@ -215,15 +197,6 @@ class CameraInterface:
         avg_bgr = np.median(pixels, axis=0).astype(int)
         return ColorMeasurement(r=int(avg_bgr[2]), g=int(avg_bgr[1]), b=int(avg_bgr[0]))
 
-    def take_picture(self) -> Path:
-        self._require_open()
-        ok, frame = self._camera.read()
-        if not ok:
-            raise CameraError("Camera read failed while taking picture.")
-        path = Path(datetime.now().strftime("microscope_%Y%m%d_%H%M%S.jpg"))
-        cv2.imwrite(str(path), frame)
-        return path
-
     def pick_roi_interactively(self) -> tuple[int, int, int, int]:
         self._require_open()
         for _ in range(5):
@@ -241,26 +214,7 @@ class CameraInterface:
 
     def _require_open(self):
         if self._camera is None or not self._camera.isOpened():
-            raise CameraError("Camera is not open. Call open() or use the context manager.")
-
-
-# ── CMY simulator ──────────────────────────────────────────────────────────────
-
-def simulate_cmy_mix(vol_cyan: float, vol_magenta: float, vol_yellow: float, *,
-                     gamma: float = 1.4, cross_coupling: float = 0.08,
-                     noise_std: float = 3.0, rng=None) -> ColorMeasurement:
-    """Subtractive CMY mixing with gamma nonlinearity, cross-channel coupling, and noise."""
-    if rng is None:
-        rng = np.random.default_rng()
-    r = 255.0 * (1.0 - vol_cyan    ** gamma)
-    g = 255.0 * (1.0 - vol_magenta ** gamma)
-    b = 255.0 * (1.0 - vol_yellow  ** gamma)
-    r -= 255.0 * cross_coupling * (vol_magenta + vol_yellow) / 2.0
-    g -= 255.0 * cross_coupling * (vol_cyan    + vol_yellow) / 2.0
-    b -= 255.0 * cross_coupling * (vol_cyan    + vol_magenta) / 2.0
-    noise = rng.normal(0.0, noise_std, 3)
-    rgb   = np.clip(np.array([r, g, b]) + noise, 0, 255).astype(int)
-    return ColorMeasurement(r=int(rgb[0]), g=int(rgb[1]), b=int(rgb[2]))
+            raise CameraError("Camera is not open. Call open() or use context manager.")
 
 
 # ── Color helpers ──────────────────────────────────────────────────────────────
@@ -281,32 +235,27 @@ def delta_e_ciede2000(a: ColorMeasurement, b: ColorMeasurement) -> float:
 
 
 def random_target_color(seed: Optional[int] = None) -> ColorMeasurement:
-    """seed=None uses system time — truly random each run."""
+    import random
     rng = random.Random(seed)
     return ColorMeasurement(r=rng.randint(0, 255), g=rng.randint(0, 255), b=rng.randint(0, 255))
 
 
 def map_to_simplex(c_raw: float, m_raw: float) -> tuple[float, float, float]:
-    """[0,1]² → CMY 2-simplex (c + m + y = 1, all >= 0)."""
     c = float(c_raw)
     m = (1.0 - c) * float(m_raw)
     return c, m, 1.0 - c - m
 
 
-# ── Bayesian color optimizer ───────────────────────────────────────────────────
+# ── Bayesian optimizer ─────────────────────────────────────────────────────────
 
 class ColorOptimizer:
-    """Bayesian (GP + EI) optimization over CMY volumes to match a target color."""
-
     SPACE = [Real(0.0, 1.0, name="c_raw"), Real(0.0, 1.0, name="m_raw")]
 
-    def __init__(self, target: ColorMeasurement, camera: Optional[CameraInterface] = None,
-                 well_roi: Optional[tuple[int, int, int, int]] = None, n_calls: int = 25,
+    def __init__(self, target: ColorMeasurement, camera: CameraInterface,
+                 well_roi: tuple[int, int, int, int], n_calls: int = 25,
                  n_initial_points: int = 5, settle_seconds: float = 1.5,
                  convergence_delta_e: float = 2.0, log_dir: Path = Path("."),
-                 random_seed: int = 42, test_mode: bool = False):
-        if not test_mode and (camera is None or well_roi is None):
-            raise ValueError("camera and well_roi are required when test_mode=False.")
+                 random_seed: int = 42):
         self.target              = target
         self.camera              = camera
         self.well_roi            = well_roi
@@ -316,36 +265,42 @@ class ColorOptimizer:
         self.convergence_delta_e = convergence_delta_e
         self.log_dir             = Path(log_dir)
         self.random_seed         = random_seed
-        self.test_mode           = test_mode
-        self._rng                = np.random.default_rng(random_seed)
-        self._history:           list[OptimizationStep] = []
-        self._iteration          = 0
-        self._best_de            = float("inf")
-        self._best_params        = [0.5, 0.5]
+        self._history:    list[OptimizationStep] = []
+        self._iteration   = 0
+        self._best_de     = float("inf")
+        self._best_params = [0.5, 0.5]
 
-    def _evaluate(self, vol_cyan: float, vol_magenta: float, vol_yellow: float):
-        if self.test_mode:
-            return simulate_cmy_mix(vol_cyan, vol_magenta, vol_yellow, rng=self._rng)
-        MAX_PIECE_WIDTH = 25
-        w_c = round(vol_cyan    * MAX_PIECE_WIDTH)
-        w_m = round(vol_magenta * MAX_PIECE_WIDTH)
-        w_y = round(vol_yellow  * MAX_PIECE_WIDTH)
-        print(f"  Dispensing: cyan={w_c}  magenta={w_m}  yellow={w_y}")
-        # Uncomment to wire to microfluidics.py:
-        # from microfluidics import activate, Drop, DROP1_ROW, DROP2_ROW, DROP3_ROW, PIECE_FINAL_COL
-        # activate([Drop(10, w_c, DROP1_ROW, PIECE_FINAL_COL),
-        #           Drop(10, w_m, DROP2_ROW, PIECE_FINAL_COL),
-        #           Drop(10, w_y, DROP3_ROW, PIECE_FINAL_COL)])
+    def _evaluate(self, vol_cyan: float, vol_magenta: float, vol_yellow: float) -> ColorMeasurement:
+        # Convert fractions to electrode widths
+        w_c = max(2, round(vol_cyan    * MAX_PIECE_WIDTH))
+        w_m = max(2, round(vol_magenta * MAX_PIECE_WIDTH))
+        w_y = max(2, round(vol_yellow  * MAX_PIECE_WIDTH))
+        print(f"  Widths: cyan={w_c}  magenta={w_m}  yellow={w_y}")
+
+        # Split a piece from each ink reservoir
+        colormix1.split_and_move(row=colormix1.DROP1_ROW, label="Cyan",
+                                  held_pairs=[], piece_w=w_c)
+        colormix1.split_and_move(row=colormix1.DROP2_ROW, label="Magenta",
+                                  held_pairs=[(colormix1.DROP1_ROW, w_c)], piece_w=w_m)
+        colormix1.split_and_move(row=colormix1.DROP3_ROW, label="Yellow",
+                                  held_pairs=[(colormix1.DROP1_ROW, w_c),
+                                              (colormix1.DROP2_ROW, w_m)], piece_w=w_y)
+
+        # Converge, merge, and mix all three pieces
+        colormix1.move_pieces_to_meet(w_c, w_m, w_y)
+
+        # Let drop settle then read color from camera
         time.sleep(self.settle_seconds)
         x, y, w, h = self.well_roi
         return self.camera.get_average_color_from_rectangle(x=x, y=y, width=w, height=h)
 
     def _objective(self, params: list[float]) -> float:
-        c_raw, m_raw = params
+        c_raw, m_raw         = params
         vol_cyan, vol_magenta, vol_yellow = map_to_simplex(c_raw, m_raw)
-        self._iteration += 1
+        self._iteration     += 1
         tag = "[SEED]" if self._iteration <= self.n_initial_points else "[GP]  "
-        print(f"  Trial {self._iteration:>2}/{self.n_calls}  {tag}  C={vol_cyan:.3f}  M={vol_magenta:.3f}  Y={vol_yellow:.3f}", end="  ")
+        print(f"  Trial {self._iteration:>2}/{self.n_calls}  {tag}  "
+              f"C={vol_cyan:.3f}  M={vol_magenta:.3f}  Y={vol_yellow:.3f}", end="  ")
 
         try:
             color = self._evaluate(vol_cyan, vol_magenta, vol_yellow)
@@ -368,8 +323,9 @@ class ColorOptimizer:
     def run(self) -> OptimizationResult:
         print(f"\n--- Bayesian CMY Optimizer ---")
         print(f"Target : {self.target}")
-        print(f"Trials : {self.n_calls}  ({self.n_initial_points} random seed + {self.n_calls - self.n_initial_points} GP-guided)")
-        print(f"Converge when dE < {self.convergence_delta_e}  (< 2.0 = visually identical)\n")
+        print(f"Trials : {self.n_calls}  "
+              f"({self.n_initial_points} random + {self.n_calls - self.n_initial_points} GP-guided)")
+        print(f"Converge when dE < {self.convergence_delta_e}\n")
 
         optimizer = Optimizer(
             dimensions=self.SPACE, base_estimator="GP", acq_func="EI",
@@ -410,9 +366,9 @@ class ColorOptimizer:
         path = self.log_dir / f"color_opt_{ts}.json"
         record = {
             "metadata": {
-                "timestamp": ts, "mode": "test" if self.test_mode else "live",
-                "target_hex": self.target.hex, "target_rgb": self.target.rgb,
-                "n_calls": self.n_calls, "n_initial_points": self.n_initial_points,
+                "timestamp": ts, "target_hex": self.target.hex,
+                "target_rgb": self.target.rgb, "n_calls": self.n_calls,
+                "n_initial_points": self.n_initial_points,
                 "convergence_delta_e": self.convergence_delta_e,
                 "random_seed": self.random_seed, "well_roi": self.well_roi,
             },
@@ -429,31 +385,21 @@ class ColorOptimizer:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    TEST_MODE           = True   # True = dry-run, no hardware needed
-    N_CALLS             = 25     # Max trials (stops early if converged)
-    N_INITIAL_POINTS    = 5      # Random trials before GP fitting kicks in
-    CONVERGENCE_DELTA_E = 2.0    # Stop when dE drops below this
+    N_CALLS             = 25
+    N_INITIAL_POINTS    = 5
+    CONVERGENCE_DELTA_E = 2.0
     RANDOM_SEED         = 42
     LOG_DIR             = Path("experiment_logs")
 
-    target = random_target_color(seed=None)  # truly random each run
+    target = random_target_color(seed=None)
     print(f"Target color: {target}")
 
-    if TEST_MODE:
+    with CameraInterface(camera_address=0, warmup_frames=15, measure_frames=5, roi_margin=5) as camera:
+        roi = camera.pick_roi_interactively()
         opt = ColorOptimizer(
-            target=target, n_calls=N_CALLS, n_initial_points=N_INITIAL_POINTS,
-            convergence_delta_e=CONVERGENCE_DELTA_E, log_dir=LOG_DIR,
-            random_seed=RANDOM_SEED, test_mode=True,
+            target=target, camera=camera, well_roi=roi,
+            n_calls=N_CALLS, n_initial_points=N_INITIAL_POINTS,
+            settle_seconds=1.5, convergence_delta_e=CONVERGENCE_DELTA_E,
+            log_dir=LOG_DIR, random_seed=RANDOM_SEED,
         )
         result = opt.run()
-    else:
-        with CameraInterface(camera_address=0, warmup_frames=15, measure_frames=5,
-                             roi_margin=5, lock_camera_settings=True) as camera:
-            roi = (100, 100, 50, 50)  # <-- replace with your actual ROI
-            opt = ColorOptimizer(
-                target=target, camera=camera, well_roi=roi,
-                n_calls=N_CALLS, n_initial_points=N_INITIAL_POINTS, settle_seconds=1.5,
-                convergence_delta_e=CONVERGENCE_DELTA_E, log_dir=LOG_DIR,
-                random_seed=RANDOM_SEED, test_mode=False,
-            )
-            result = opt.run()
