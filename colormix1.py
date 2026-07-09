@@ -1,7 +1,7 @@
 """The original code for this chip was written in C++ by ACX Instruments and later adapted for Python using ctypes.
-To use this chip, the user must purchase the hardware from ACX Instruments. 
+To use this chip, the user must purchase the hardware from ACX Instruments.
 ACX provides the required starter software and DLL files with the purchased device.
-Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path. 
+Because the DLL is proprietary company software, I cannot share the actual DLL file or its file path.
 The placeholder below represents where the ACX-provided DLL would be loaded."""
 
 import ctypes
@@ -9,8 +9,12 @@ from ctypes import POINTER, c_int, c_void_p, Structure
 import threading
 import time
 import pandas as pd
+import os
 
-microfluidics = ctypes.CDLL("path_from_acx")
+# ── DLL load ──────────────────────────────────────────────────────────────────
+
+os.add_dll_directory(r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows")
+microfluidics = ctypes.CDLL(r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows\DLLTest.dll")
 
 microfluidics.SetPower.argtypes     = [ctypes.c_bool]
 microfluidics.SetVolt.argtypes      = [c_int] * 9
@@ -125,9 +129,7 @@ def _held_pause(drops, prompt):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-# held_pairs: list of (row, width, height) — each drop carries its own height from CSV
 def held_drops(held_pairs):
-    print(f"  [held_drops] holding {len(held_pairs)} previous piece(s): {held_pairs}")
     drops = []
     for r, w, h in held_pairs:
         drops.append(Drop(MAIN_SNAP_H, MAIN_W, r, MAIN_COL))
@@ -138,7 +140,6 @@ def held_drops(held_pairs):
 # ── Split sequence ────────────────────────────────────────────────────────────
 
 def load_and_hold_drop(row, label, held_pairs, piece_w, piece_h):
-    print(f"[load_and_hold_drop] {label} — row={row}, piece_w={piece_w}, piece_h={piece_h}")
     drops = held_drops(held_pairs) + [Drop(MAIN_H, LOAD_W, row, MAIN_COL)]
     activate(drops)
     _held_pause(drops,
@@ -147,7 +148,6 @@ def load_and_hold_drop(row, label, held_pairs, piece_w, piece_h):
 
 
 def split_and_move(row, label, held_pairs, piece_w, piece_h):
-    print(f"\n[split_and_move] {label} — row={row}, piece_w={piece_w}, piece_h={piece_h}, held={held_pairs}")
 
     # 1. Load
     load_and_hold_drop(row, label, held_pairs, piece_w, piece_h)
@@ -242,8 +242,6 @@ def mix_drop(all_mains, merge_row, merge_col, merge_h, merge_w):
 # ── Merge sequence ────────────────────────────────────────────────────────────
 
 def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
-    print(f"\n[move_pieces_to_meet] Drop1={h1}×{w1}, Drop2={h2}×{w2}, Drop3={h3}×{w3}")
-    print(f"  merge_h will be {h1+h2+h3}, merged_w will be {w1+w2+w3}")
     all_mains = [
         Drop(MAIN_SNAP_H, MAIN_W, DROP1_ROW, MAIN_COL),
         Drop(MAIN_SNAP_H, MAIN_W, DROP2_ROW, MAIN_COL),
@@ -275,8 +273,8 @@ def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
     ], f">>> All on row={MEETING_ROW} — press Enter to sweep left: ")
 
     # Phase B: column sweep
-    merged_w = w1 + w2 + w3
-    merge_h  = h1 + h2 + h3   # total height is sum of all three pieces
+    merged_w  = w1 + w2 + w3
+    merge_h   = h1 + h2 + h3
     col_steps = PIECE_FINAL_COL - MEETING_COL
     print(f"Phase B — sweeping to col={MEETING_COL} ({col_steps} steps)...")
     for i in range(1, col_steps + 1):
@@ -291,7 +289,26 @@ def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
 
     print(f"\nMixing at row={MEETING_ROW}, col={MEETING_COL}...")
     mix_drop(all_mains, MEETING_ROW, MEETING_COL, merge_h, merged_w)
-    _held_pause(merged, f">>> Mix complete — press Enter to finish: ")
+    _held_pause(merged, f">>> Mix complete — press Enter to unload: ")
+
+    # ── Unload sequence ───────────────────────────────────────────────────────
+
+    # Move merged drop col 30 → 100 (row stays at 55)
+    print("Unloading — moving to (55, 100)...")
+    for c in range(MEETING_COL + 1, 101):
+        activate(all_mains + [Drop(merge_h, merged_w, 55, c)])
+
+    _held_pause(all_mains + [Drop(merge_h, merged_w, 55, 100)],
+                ">>> Mixed drop at (55, 100) — confirm, press Enter to unload: ")
+
+    # Move merged drop col 100 → 128
+    print("Moving to unload position (55, 128)...")
+    for c in range(101, 129):
+        activate(all_mains + [Drop(merge_h, merged_w, 55, c)])
+
+    # Deactivate merged drop, keep reservoirs holding
+    activate(all_mains)
+    _held_pause(all_mains, ">>> Merged drop unloaded at (55, 128) — reservoirs holding, press Enter to finish: ")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -313,9 +330,7 @@ def main():
     print("Voltages: " + " ".join(str(v.value) for v in voltages))
     input("Voltage confirmed — press Enter to begin: ")
 
-    # All dimensions loaded directly from CSV
     h1, w1, h2, w2, h3, w3 = load_volumes_from_csv(r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx")
-    print(f"[main] CSV loaded — h1={h1}, w1={w1}, h2={h2}, w2={w2}, h3={h3}, w3={w3}")
 
     split_and_move(row=DROP1_ROW, label="Drop 1", held_pairs=[], piece_w=w1, piece_h=h1)
     input(">>> Drop 1 holding — press Enter for Drop 2: ")
