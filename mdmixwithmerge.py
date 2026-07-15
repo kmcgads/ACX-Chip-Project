@@ -51,10 +51,7 @@ MAIN_W          = 15
 MAIN_COL        = 2
 DROP1_ROW       = 55
 DROP2_ROW       = 105
-
-# Drop 3 — starts at row=5, col=10, same height/width as the others
 DROP3_ROW       = 10
-DROP3_COL       = 2
 
 # Piece geometry (shared by all three drops)
 PIECE_START_COL = 30
@@ -209,7 +206,7 @@ def move_pieces_to_meet():
                 # Main bodies — all three held in place
                 Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
                 Drop(MAIN_H, MAIN_W, DROP2_ROW, MAIN_COL),
-                Drop(MAIN_H, MAIN_W, DROP3_ROW, DROP3_COL),
+                Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
                 # Pieces
                 Drop(MAIN_H, PIECE_END_W, MEETING_ROW, MEETING_COL),   # Drop 1: already at meeting row
                 Drop(MAIN_H, PIECE_END_W, piece2_row,  MEETING_COL),   # Drop 2: moving up
@@ -227,7 +224,7 @@ def move_pieces_to_meet():
         [
             Drop(MAIN_H, MAIN_W,      DROP1_ROW,   MAIN_COL),
             Drop(MAIN_H, MAIN_W,      DROP2_ROW,   MAIN_COL),
-            Drop(MAIN_H, MAIN_W,      DROP3_ROW,   DROP3_COL),
+            Drop(MAIN_H, MAIN_W,      DROP3_ROW,   MAIN_COL),
             Drop(MAIN_H, PIECE_END_W, MEETING_ROW, MEETING_COL),
         ],
         debug_label="MERGE all three pieces at meeting point"
@@ -238,7 +235,7 @@ def move_pieces_to_meet():
     all_mains = [
         Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
         Drop(MAIN_H, MAIN_W, DROP2_ROW, MAIN_COL),
-        Drop(MAIN_H, MAIN_W, DROP3_ROW, DROP3_COL),
+        Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
     ]
     H, W = MAIN_H, MAIN_W
     r, c = MEETING_ROW, MEETING_COL
@@ -288,7 +285,7 @@ def move_piece_out():
             [
                 Drop(MAIN_H, MAIN_W,      DROP1_ROW,   MAIN_COL),
                 Drop(MAIN_H, MAIN_W,      DROP2_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,      DROP3_ROW,   DROP3_COL),
+                Drop(MAIN_H, MAIN_W,      DROP3_ROW,   MAIN_COL),
                 Drop(MAIN_H, PIECE_END_W, MEETING_ROW, col),
             ],
             debug_label=f"MOVE OUT piece at col={col}"
@@ -350,7 +347,7 @@ def main():
         row=DROP3_ROW,
         label="Drop 3 (row=5)",
         held_items=[(DROP1_ROW, MAIN_COL), (DROP2_ROW, MAIN_COL)],
-        start_col=DROP3_COL
+        start_col=MAIN_COL
     )
 
     # ── Move all three pieces to meet, merge, and mix ─────────────────────────
