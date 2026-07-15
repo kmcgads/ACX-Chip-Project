@@ -35,27 +35,25 @@ class Drop(Structure):
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAIN_COL        = 2
-MAIN_H          = 20
-MAIN_SNAP_H     = 15
+MAIN_H          = 10
+MAIN_SNAP_H     = 10
 MAIN_W          = 15
-PIECE_START_COL = 30
-PIECE_START_W   = 15
-STRETCH_STEPS   = 25
-NECK_START      = MAIN_COL + MAIN_W
-PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS
-NECK_END        = PIECE_FINAL_COL - 1
-LOAD_W          = 20
-STRETCH_TARGET  = 45
-STRETCH_RANGE   = STRETCH_TARGET - LOAD_W
+NECK_START      = MAIN_COL + MAIN_W   # col 17 — right edge of reservoir
+
+# Stretch: only 10 steps (proven working range)
+LOAD_W          = 15
+STRETCH_TARGET  = 25                  # 10 steps from LOAD_W=15
+STRETCH_RANGE   = STRETCH_TARGET - LOAD_W  # 10
+
+# Piece starts just within reach of the 10-step stretch
+PIECE_START_COL = 22                  # inside stretched range (cols 2-26)
+PIECE_FINAL_COL = 55                  # final resting position
 
 DROP1_ROW   = 55
 DROP2_ROW   = 85
 DROP3_ROW   = 10
 MEETING_ROW = 55
 MEETING_COL = 30
-
-_dll_lock = threading.Lock()
-
 
 # ── CSV loader ────────────────────────────────────────────────────────────────
 
@@ -68,22 +66,21 @@ def load_volumes_from_csv(csv_path):
     w2 = int(row["drop 2 width"])
     h3 = int(row["drop 3 height"])
     w3 = int(row["drop 3 width"])
-    print(f"Loaded from CSV: Drop1={h1}×{w1}, Drop2={h2}×{w2}, Drop3={h3}×{w3}")
+    print(f"Loaded from CSV: Drop1={h1}x{w1}, Drop2={h2}x{w2}, Drop3={h3}x{w3}")
     return h1, w1, h2, w2, h3, w3
 
 
 # ── Low-level activation ──────────────────────────────────────────────────────
 
-def _hw_activate(drops: list) -> None:
+def _hw_activate(drops: list) -> int:
     n   = len(drops)
     arr = (Drop * n)(*drops)
-    with _dll_lock:
-        microfluidics.ActivateElec(128, 128, n, arr)
+    return microfluidics.ActivateElec(128, 128, n, arr)
 
 
-def activate(drops):
+def activate(drops, delay=0.8):
     _hw_activate(drops)
-    time.sleep(0.5)
+    time.sleep(delay)
 
 
 def _activate_mix(drops):
@@ -133,73 +130,81 @@ def held_drops(held_pairs):
     drops = []
     for r, w, h in held_pairs:
         drops.append(Drop(MAIN_SNAP_H, MAIN_W, r, MAIN_COL))
-        drops.append(Drop(h,           w,      r, PIECE_FINAL_COL))
+        drops.append(Drop(h, w, r, PIECE_FINAL_COL))
     return drops
 
 
 # ── Split sequence ────────────────────────────────────────────────────────────
 
-def load_and_hold_drop(row, label, held_pairs, piece_w, piece_h):
-    drops = held_drops(held_pairs) + [Drop(MAIN_H, LOAD_W, row, MAIN_COL)]
-    activate(drops)
-    _held_pause(drops,
-                f"\n>>> {label} — electrode ACTIVE at row={row}, col={MAIN_COL} "
-                f"({MAIN_H}×{LOAD_W}) — load 20×20 drop, then press Enter to stretch: ")
-
-
 def split_and_move(row, label, held_pairs, piece_w, piece_h):
+    """
+    Split strategy:
+      1. Load reservoir at MAIN_COL
+      2. Stretch reservoir rightward 10 steps (proven working range) → width=25
+      3. Pattern: reservoir + bridge + piece (piece starts inside stretched drop at col 22)
+      4. Walk piece from col 22 → PIECE_FINAL_COL while holding reservoir
+    """
 
     # 1. Load
-    load_and_hold_drop(row, label, held_pairs, piece_w, piece_h)
+    res = Drop(MAIN_H, LOAD_W, row, MAIN_COL)
+    activate(held_drops(held_pairs) + [res])
+    _held_pause(
+        held_drops(held_pairs) + [res],
+        f"\n>>> {label} — ACTIVE at row={row} ({MAIN_H}x{LOAD_W}) — load drop, press Enter to stretch: "
+    )
 
-    # 2. Stretch
-    print(f"{label} stretching {LOAD_W} → {STRETCH_TARGET}...")
+    # 2. Stretch: 10 steps, 1.5s each — electrode grows from col 2 with drop inside
+    print(f"{label} stretching {LOAD_W} -> {STRETCH_TARGET} ({STRETCH_RANGE} steps at 1.5s each)...")
     for i in range(1, STRETCH_RANGE + 1):
-        activate(held_drops(held_pairs) + [Drop(MAIN_H, LOAD_W + i, row, MAIN_COL)])
+        current_w = LOAD_W + i
+        ret = _hw_activate(held_drops(held_pairs) + [Drop(MAIN_H, current_w, row, MAIN_COL)])
+        time.sleep(1.5)
+        print(f"  stretch step {i}/{STRETCH_RANGE} — width={current_w}, ActivateElec={ret}")
 
-    _held_pause(held_drops(held_pairs) + [Drop(MAIN_H, STRETCH_TARGET, row, MAIN_COL)],
-                f">>> {label} stretched to {STRETCH_TARGET} — confirm neck, press Enter to pattern: ")
+    _held_pause(
+        held_drops(held_pairs) + [Drop(MAIN_H, STRETCH_TARGET, row, MAIN_COL)],
+        f">>> {label} stretched to width={STRETCH_TARGET} — confirm drop extended, press Enter to pattern: "
+    )
 
-    # 3. Pattern
+    # 3. Pattern: activate reservoir + bridge + piece simultaneously
+    #    Drop is currently spanning cols 2-26. We pattern into:
+    #      - reservoir: col 2, width 15 (cols 2-16)
+    #      - bridge:    col 17, width 5 (cols 17-21) — keeps liquid connected
+    #      - piece:     col 22, piece size (cols 22-26)
+    bridge_w = PIECE_START_COL - NECK_START  # 22-17 = 5
     drops_pattern = held_drops(held_pairs) + [
-        Drop(MAIN_SNAP_H, MAIN_W,        row, MAIN_COL),
-        Drop(piece_h,     PIECE_START_W, row, PIECE_START_COL),
+        Drop(MAIN_SNAP_H, MAIN_W,    row, MAIN_COL),
+        Drop(MAIN_H,      bridge_w,  row, NECK_START),
+        Drop(piece_h,     piece_w,   row, PIECE_START_COL),
     ]
     activate(drops_pattern)
-    _held_pause(drops_pattern,
-                f">>> {label} patterned — main=15×15, piece={piece_h}×{PIECE_START_W}, press Enter to move: ")
+    _held_pause(
+        drops_pattern,
+        f">>> {label} patterned — reservoir at col={MAIN_COL}, piece at col={PIECE_START_COL} "
+        f"({piece_h}x{piece_w}), bridge={bridge_w}w — confirm liquid connected, press Enter to walk: "
+    )
 
-    # 4. Move + pinch
-    print(f"{label} moving piece, pinching {PIECE_START_W} → {piece_w}...")
-    for i in range(1, STRETCH_STEPS + 1):
-        current_col   = PIECE_START_COL + i
-        current_width = max(piece_w, round(
-            PIECE_START_W - (PIECE_START_W - piece_w) * i / STRETCH_STEPS
-        ))
-        activate(held_drops(held_pairs) + [
-            Drop(MAIN_SNAP_H, MAIN_W,        row, MAIN_COL),
-            Drop(piece_h,     current_width, row, current_col),
+    # 4. Walk piece from PIECE_START_COL to PIECE_FINAL_COL
+    #    Piece electrode moves rightward, dragging liquid away from reservoir
+    walk_steps = PIECE_FINAL_COL - PIECE_START_COL
+    print(f"{label} walking piece col={PIECE_START_COL} -> col={PIECE_FINAL_COL} ({walk_steps} steps)...")
+    for i in range(1, walk_steps + 1):
+        current_col = PIECE_START_COL + i
+        _hw_activate(held_drops(held_pairs) + [
+            Drop(MAIN_SNAP_H, MAIN_W,  row, MAIN_COL),
+            Drop(piece_h,     piece_w, row, current_col),
         ])
+        time.sleep(1.0)
+        if i % 5 == 0 or i == walk_steps:
+            print(f"  walk step {i}/{walk_steps} — piece at col={current_col}")
 
-    _held_pause(held_drops(held_pairs) + [
-        Drop(MAIN_SNAP_H, MAIN_W,  row, MAIN_COL),
-        Drop(piece_h,     piece_w, row, PIECE_FINAL_COL),
-    ], f">>> {label} piece at col={PIECE_FINAL_COL} — confirm {piece_h}×{piece_w} piece separated, press Enter for neck: ")
-
-    # 5. Neck deactivation
-    print(f"{label} deactivating neck {NECK_END} → {NECK_START}...")
-    for release_col in range(NECK_END, NECK_START - 1, -1):
-        bridge_width = release_col - NECK_START
-        neck_drops = held_drops(held_pairs) + [Drop(MAIN_SNAP_H, MAIN_W, row, MAIN_COL)]
-        if bridge_width > 0:
-            neck_drops += [Drop(MAIN_SNAP_H, bridge_width, row, NECK_START)]
-        neck_drops += [Drop(piece_h, piece_w, row, PIECE_FINAL_COL)]
-        activate(neck_drops)
-
-    _held_pause(held_drops(held_pairs) + [
-        Drop(MAIN_SNAP_H, MAIN_W,  row, MAIN_COL),
-        Drop(piece_h,     piece_w, row, PIECE_FINAL_COL),
-    ], f">>> {label} fully split — reservoir=15×15, piece={piece_h}×{piece_w}, press Enter to continue: ")
+    _held_pause(
+        held_drops(held_pairs) + [
+            Drop(MAIN_SNAP_H, MAIN_W,  row, MAIN_COL),
+            Drop(piece_h,     piece_w, row, PIECE_FINAL_COL),
+        ],
+        f">>> {label} piece at col={PIECE_FINAL_COL} ({piece_h}x{piece_w}) — confirm separated, press Enter to continue: "
+    )
 
 
 # ── Mix ───────────────────────────────────────────────────────────────────────
@@ -230,7 +235,7 @@ def mix_drop(all_mains, merge_row, merge_col, merge_h, merge_w):
     for i in range(1, 16):      _activate_mix(all_mains + [Drop(H, W, r + i, c + i)])
     for i in range(15, -1, -1): _activate_mix(all_mains + [Drop(H, W, r + i, c + i)])
 
-    print("  Mix pass 6: clockwise rectangle 30×20...")
+    print("  Mix pass 6: clockwise rectangle 30x20...")
     for i in range(1, 31):      _activate_mix(all_mains + [Drop(H, W, r,      c + i)])
     for i in range(1, 21):      _activate_mix(all_mains + [Drop(H, W, r + i,  c + 30)])
     for i in range(30, -1, -1): _activate_mix(all_mains + [Drop(H, W, r + 20, c + i)])
@@ -239,7 +244,7 @@ def mix_drop(all_mains, merge_row, merge_col, merge_h, merge_w):
     print("  Mix complete.")
 
 
-# ── Merge sequence ────────────────────────────────────────────────────────────
+# ── Merge + unload ────────────────────────────────────────────────────────────
 
 def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
     all_mains = [
@@ -252,11 +257,11 @@ def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
         Drop(h1, w1, MEETING_ROW, PIECE_FINAL_COL),
         Drop(h2, w2, DROP2_ROW,   PIECE_FINAL_COL),
         Drop(h3, w3, DROP3_ROW,   PIECE_FINAL_COL),
-    ], f"\n>>> All splits done — press Enter to move to meeting point: ")
+    ], "\n>>> All splits done — press Enter to move to meeting point: ")
 
     # Phase A: row alignment
     row_steps = max(abs(DROP2_ROW - MEETING_ROW), abs(MEETING_ROW - DROP3_ROW))
-    print(f"Phase A — aligning to row={MEETING_ROW} ({row_steps} steps)...")
+    print(f"Phase A — aligning rows to {MEETING_ROW} ({row_steps} steps)...")
     for i in range(1, row_steps + 1):
         piece2_row = max(DROP2_ROW - i, MEETING_ROW)
         piece3_row = min(DROP3_ROW + i, MEETING_ROW)
@@ -270,7 +275,7 @@ def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
         Drop(h1, w1, MEETING_ROW, PIECE_FINAL_COL),
         Drop(h2, w2, MEETING_ROW, PIECE_FINAL_COL),
         Drop(h3, w3, MEETING_ROW, PIECE_FINAL_COL),
-    ], f">>> All on row={MEETING_ROW} — press Enter to sweep left: ")
+    ], f">>> All on row={MEETING_ROW} — press Enter to sweep to meeting col: ")
 
     # Phase B: column sweep
     merged_w  = w1 + w2 + w3
@@ -285,36 +290,33 @@ def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
 
     merged = all_mains + [Drop(merge_h, merged_w, MEETING_ROW, MEETING_COL)]
     activate(merged)
-    _held_pause(merged, f">>> Merged {merge_h}×{merged_w} — confirm visible, press Enter to mix: ")
+    _held_pause(merged, f">>> Merged {merge_h}x{merged_w} — confirm visible, press Enter to mix: ")
 
     print(f"\nMixing at row={MEETING_ROW}, col={MEETING_COL}...")
     mix_drop(all_mains, MEETING_ROW, MEETING_COL, merge_h, merged_w)
-    _held_pause(merged, f">>> Mix complete — press Enter to unload: ")
+    _held_pause(merged, ">>> Mix complete — press Enter to unload: ")
 
-    # ── Unload sequence ───────────────────────────────────────────────────────
-
-    # Move merged drop col 30 → 100 (row stays at 55)
+    # Unload: col 30 → 128
     print("Unloading — moving to (55, 100)...")
     for c in range(MEETING_COL + 1, 101):
         activate(all_mains + [Drop(merge_h, merged_w, 55, c)])
 
     _held_pause(all_mains + [Drop(merge_h, merged_w, 55, 100)],
-                ">>> Mixed drop at (55, 100) — confirm, press Enter to unload: ")
+                ">>> Drop at (55, 100) — confirm, press Enter to finish unload: ")
 
-    # Move merged drop col 100 → 128
     print("Moving to unload position (55, 128)...")
     for c in range(101, 129):
         activate(all_mains + [Drop(merge_h, merged_w, 55, c)])
 
-    # Deactivate merged drop, keep reservoirs holding
     activate(all_mains)
-    _held_pause(all_mains, ">>> Merged drop unloaded at (55, 128) — reservoirs holding, press Enter to finish: ")
+    _held_pause(all_mains, ">>> Drop unloaded at (55, 128) — reservoirs holding, press Enter to finish: ")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    microfluidics.InitUSB()
+    ret = microfluidics.InitUSB()
+    print(f"InitUSB returned: {ret}")
     if microfluidics.OpenUSB():
         input("USB open — press Enter: ")
     else:
@@ -323,7 +325,9 @@ def main():
 
     microfluidics.SetPower(True)
     input("Power on — press Enter to set voltage: ")
-    microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
+    ret = microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
+    print(f"SetVolt returned: {ret}")
+    time.sleep(1)
 
     voltages = [ctypes.c_int(0) for _ in range(9)]
     microfluidics.InquireVolt(*[ctypes.byref(v) for v in voltages])
