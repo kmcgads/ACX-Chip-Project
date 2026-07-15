@@ -35,7 +35,7 @@ class Drop(Structure):
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAIN_COL        = 2
-MAIN_H          = 20
+MAIN_H          = 10
 MAIN_SNAP_H     = 15
 MAIN_W          = 15
 PIECE_START_COL = 30
@@ -44,8 +44,8 @@ STRETCH_STEPS   = 25
 NECK_START      = MAIN_COL + MAIN_W
 PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS
 NECK_END        = PIECE_FINAL_COL - 1
-LOAD_W          = 20
-STRETCH_TARGET  = 45
+LOAD_W          = 15
+STRETCH_TARGET  = 35
 STRETCH_RANGE   = STRETCH_TARGET - LOAD_W
 
 DROP1_ROW   = 55
@@ -53,9 +53,6 @@ DROP2_ROW   = 85
 DROP3_ROW   = 10
 MEETING_ROW = 55
 MEETING_COL = 30
-
-_dll_lock = threading.Lock()
-
 
 # ── CSV loader ────────────────────────────────────────────────────────────────
 
@@ -77,13 +74,12 @@ def load_volumes_from_csv(csv_path):
 def _hw_activate(drops: list) -> None:
     n   = len(drops)
     arr = (Drop * n)(*drops)
-    with _dll_lock:
-        microfluidics.ActivateElec(128, 128, n, arr)
+    microfluidics.ActivateElec(128, 128, n, arr)
 
 
 def activate(drops):
     _hw_activate(drops)
-    time.sleep(0.5)
+    time.sleep(0.8)
 
 
 def _activate_mix(drops):
@@ -92,7 +88,7 @@ def _activate_mix(drops):
 
 
 # ── Hold thread ───────────────────────────────────────────────────────────────
-
+#wondering if I should try making this a constant hold instead of a singal every 0.5 seconds
 class _HoldThread:
     def __init__(self):
         self._drops  = []
@@ -314,7 +310,8 @@ def move_pieces_to_meet(h1, w1, h2, w2, h3, w3):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    microfluidics.InitUSB()
+    ret = microfluidics.InitUSB()
+    print(f"InitUSB returned: {ret}")
     if microfluidics.OpenUSB():
         input("USB open — press Enter: ")
     else:
@@ -323,14 +320,16 @@ def main():
 
     microfluidics.SetPower(True)
     input("Power on — press Enter to set voltage: ")
-    microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
+    ret = microfluidics.SetVolt(45, 45, 45, 0, 0, 0, 0, 0, 0)
+    print(f"SetVolt returned: {ret}")
+    time.sleep(1)
 
     voltages = [ctypes.c_int(0) for _ in range(9)]
     microfluidics.InquireVolt(*[ctypes.byref(v) for v in voltages])
     print("Voltages: " + " ".join(str(v.value) for v in voltages))
     input("Voltage confirmed — press Enter to begin: ")
 
-    h1, w1, h2, w2, h3, w3 = load_volumes_from_csv(r"C:\Users\klmcg\OneDrive\Documents\mixingp2.xlsx")
+    h1, w1, h2, w2, h3, w3 = load_volumes_from_csv(r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx")
 
     split_and_move(row=DROP1_ROW, label="Drop 1", held_pairs=[], piece_w=w1, piece_h=h1)
     input(">>> Drop 1 holding — press Enter for Drop 2: ")
