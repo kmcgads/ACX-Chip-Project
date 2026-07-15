@@ -7,9 +7,12 @@ The placeholder below represents where the ACX-provided DLL would be loaded."""
 import ctypes
 from ctypes import Structure
 import time
+import os
 
-# Load library
-microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")
+# ── DLL load ──────────────────────────────────────────────────────────────────
+
+os.add_dll_directory(r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows")
+microfluidics = ctypes.CDLL(r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows\DLLTest.dll")
 
 
 class Drop(Structure):
@@ -174,7 +177,7 @@ def move_pieces_to_meet():
     )
     input(f">>> Drops merged at row={MEETING_ROW}, col={PIECE_FINAL_COL} -- press Enter to finish")
 
-
+    
 def main():
     microfluidics.InitUSB()
     res = microfluidics.OpenUSB()
