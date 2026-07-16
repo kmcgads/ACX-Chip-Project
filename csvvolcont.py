@@ -8,6 +8,7 @@ import ctypes
 from ctypes import Structure
 import time
 import os
+import openpyxl
 
 # ── DLL load ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,28 @@ def activate(drops, debug_label=""):
     time.sleep(0.5)
 
 
+# ── CSV loader ────────────────────────────────────────────────────────────────
+
+CSV_PATH = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
+
+def load_piece_widths(filepath=CSV_PATH):
+    """
+    Read piece end-widths from row 2 of the Excel file.
+    Expected columns: piece_1 width | piece_2 width | piece_3 width
+    Height is always 10 (MAIN_H) and is NOT read from the file.
+    Returns (piece1_end_w, piece2_end_w, piece3_end_w) as ints.
+    """
+    wb = openpyxl.load_workbook(filepath, data_only=True)
+    ws = wb.active
+    piece1_end_w = int(ws.cell(row=2, column=1).value)
+    piece2_end_w = int(ws.cell(row=2, column=2).value)
+    piece3_end_w = int(ws.cell(row=2, column=3).value)
+    print(f"\n[CSV] Loaded piece end-widths from: {filepath}")
+    print(f"      piece_1 width={piece1_end_w}, piece_2 width={piece2_end_w}, piece_3 width={piece3_end_w}")
+    print(f"      Height is fixed at {MAIN_H} for all drops.\n")
+    return piece1_end_w, piece2_end_w, piece3_end_w
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAIN_H          = 10
@@ -56,12 +79,10 @@ DROP3_ROW       = 10
 # Piece geometry (shared by all three drops)
 PIECE_START_COL = 30
 PIECE_START_W   = 10
-PIECE_END_W     = 5
 STRETCH_STEPS   = 25
 PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55
 
 # Meeting point — all three pieces converge here
-# Drop 1 piece is already at row=55 after its split; Drops 2 & 3 travel 50 steps each
 MEETING_ROW     = DROP1_ROW                        # row=55
 MEETING_COL     = PIECE_FINAL_COL                  # col=55
 
@@ -70,24 +91,26 @@ MEETING_COL     = PIECE_FINAL_COL                  # col=55
 
 def held_drops(held_items):
     """
-    held_items: list of (row, main_col) tuples for each drop currently held.
+    held_items: list of (row, main_col, piece_end_w) tuples for each drop currently held.
     Returns a list of Drop objects — one main body and one piece per held drop.
+    piece_end_w controls the final pinched width of each held piece (read from CSV).
     """
     drops = []
-    for r, mc in held_items:
-        drops.append(Drop(MAIN_H, MAIN_W,      r, mc))
-        drops.append(Drop(MAIN_H, PIECE_END_W, r, PIECE_FINAL_COL))
+    for r, mc, piece_end_w in held_items:
+        drops.append(Drop(MAIN_H, MAIN_W,        r, mc))
+        drops.append(Drop(MAIN_H, piece_end_w,   r, PIECE_FINAL_COL))
     return drops
 
 
-def split_and_move(row, label, held_items, start_col=None):
+def split_and_move(row, label, held_items, piece_end_w, start_col=None):
     """
     Loads, stretches, splits, and moves a drop's piece to PIECE_FINAL_COL.
 
-    row        — the row this drop lives on
-    label      — human-readable name for debug output
-    held_items — list of (row, col) tuples for drops that must stay active
-    start_col  — left edge of this drop's main body (defaults to MAIN_COL=5)
+    row          — the row this drop lives on
+    label        — human-readable name for debug output
+    held_items   — list of (row, col, piece_end_w) tuples for drops that must stay active
+    piece_end_w  — final pinched width of this drop's piece (read from CSV; height always=MAIN_H)
+    start_col    — left edge of this drop's main body (defaults to MAIN_COL)
     """
     if start_col is None:
         start_col = MAIN_COL
@@ -113,7 +136,6 @@ def split_and_move(row, label, held_items, start_col=None):
     input(f">>> {label} fully stretched to width=35 -- press Enter to split")
 
     # ── Step 3: Gradually open split gap 1 pixel at a time ───────────────────
-    # A shrinking bridge between main and piece retracts 1 px per step.
     time.sleep(2)
     print(f"{label} opening split gap ({neck_gap} steps)...")
     for gap in range(neck_gap + 1):
@@ -140,20 +162,21 @@ def split_and_move(row, label, held_items, start_col=None):
     input(f">>> {label} split complete -- press Enter to move piece")
 
     # ── Step 4: Move piece ────────────────────────────────────────────────────
-    print(f"{label} moving piece {STRETCH_STEPS}px right, pinching {PIECE_START_W} → {PIECE_END_W} wide...")
+    # Pinches from PIECE_START_W down to piece_end_w (from CSV) as it moves right
+    print(f"{label} moving piece {STRETCH_STEPS}px right, pinching {PIECE_START_W} → {piece_end_w} wide...")
     time.sleep(2)
     for i in range(1, STRETCH_STEPS + 1):
         current_col   = PIECE_START_COL + i
-        current_width = round(PIECE_START_W - (PIECE_START_W - PIECE_END_W) * i / STRETCH_STEPS)
+        current_width = round(PIECE_START_W - (PIECE_START_W - piece_end_w) * i / STRETCH_STEPS)
         activate(
             held_drops(held_items) + [
-                Drop(MAIN_H, MAIN_W,        row, start_col),
-                Drop(MAIN_H, current_width, row, current_col),
+                Drop(MAIN_H, MAIN_W,         row, start_col),
+                Drop(MAIN_H, current_width,  row, current_col),
             ],
             debug_label=f"{label} MOVE step={i} col={current_col} width={current_width}"
         )
         print(f"  {label} piece at col={current_col}, width={current_width}")
-    input(f">>> {label} piece at col={PIECE_FINAL_COL} -- press Enter to begin neck deactivation")
+    input(f">>> {label} piece at col={PIECE_FINAL_COL} width={piece_end_w} -- press Enter to begin neck deactivation")
 
     # ── Step 5: Deactivate neck ───────────────────────────────────────────────
     neck_end = PIECE_FINAL_COL - 1   # col=54
@@ -165,17 +188,17 @@ def split_and_move(row, label, held_items, start_col=None):
         if bridge_width > 0:
             activate(
                 held_drops(held_items) + [
-                    Drop(MAIN_H, MAIN_W,       row, start_col),
-                    Drop(MAIN_H, bridge_width, row, neck_start),
-                    Drop(MAIN_H, PIECE_END_W,  row, PIECE_FINAL_COL),
+                    Drop(MAIN_H, MAIN_W,        row, start_col),
+                    Drop(MAIN_H, bridge_width,  row, neck_start),
+                    Drop(MAIN_H, piece_end_w,   row, PIECE_FINAL_COL),
                 ],
                 debug_label=f"{label} DEACTIVATE col={release_col} bridge={bridge_width}"
             )
         else:
             activate(
                 held_drops(held_items) + [
-                    Drop(MAIN_H, MAIN_W,      row, start_col),
-                    Drop(MAIN_H, PIECE_END_W, row, PIECE_FINAL_COL),
+                    Drop(MAIN_H, MAIN_W,       row, start_col),
+                    Drop(MAIN_H, piece_end_w,  row, PIECE_FINAL_COL),
                 ],
                 debug_label=f"{label} DEACTIVATE col={release_col} FINAL"
             )
@@ -185,12 +208,14 @@ def split_and_move(row, label, held_items, start_col=None):
     time.sleep(1)
 
 
-def move_pieces_to_meet():
+def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
     """
     Moves all three pieces simultaneously toward MEETING_ROW=55, MEETING_COL=55.
     Drop 1's piece is already at row=55 and stays put.
     Drop 2's piece travels up 50 rows (105 → 55).
     Drop 3's piece travels down 50 rows (5 → 55).
+
+    piece1_end_w / piece2_end_w / piece3_end_w — per-drop widths from CSV.
     """
     steps_to_meet = DROP2_ROW - MEETING_ROW   # 50 steps
 
@@ -204,13 +229,13 @@ def move_pieces_to_meet():
         activate(
             [
                 # Main bodies — all three held in place
-                Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
-                Drop(MAIN_H, MAIN_W, DROP2_ROW, MAIN_COL),
-                Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
-                # Pieces
-                Drop(MAIN_H, PIECE_END_W, MEETING_ROW, MEETING_COL),   # Drop 1: already at meeting row
-                Drop(MAIN_H, PIECE_END_W, piece2_row,  MEETING_COL),   # Drop 2: moving up
-                Drop(MAIN_H, PIECE_END_W, piece3_row,  MEETING_COL),   # Drop 3: moving down
+                Drop(MAIN_H, MAIN_W,       DROP1_ROW, MAIN_COL),
+                Drop(MAIN_H, MAIN_W,       DROP2_ROW, MAIN_COL),
+                Drop(MAIN_H, MAIN_W,       DROP3_ROW, MAIN_COL),
+                # Pieces — each uses its own CSV-loaded end width
+                Drop(MAIN_H, piece1_end_w, MEETING_ROW, MEETING_COL),   # Drop 1: already at meeting row
+                Drop(MAIN_H, piece2_end_w, piece2_row,  MEETING_COL),   # Drop 2: moving up
+                Drop(MAIN_H, piece3_end_w, piece3_row,  MEETING_COL),   # Drop 3: moving down
             ],
             debug_label=f"MOVE TO MEET step={i} piece2={piece2_row} piece3={piece3_row}"
         )
@@ -219,13 +244,14 @@ def move_pieces_to_meet():
     input(f">>> All pieces at row={MEETING_ROW}, col={MEETING_COL} -- press Enter to merge")
 
     # Merge — all three pieces now overlap at MEETING_ROW, MEETING_COL
+    # Use piece1's end width to represent the merged drop
     time.sleep(1)
     activate(
         [
-            Drop(MAIN_H, MAIN_W,      DROP1_ROW,   MAIN_COL),
-            Drop(MAIN_H, MAIN_W,      DROP2_ROW,   MAIN_COL),
-            Drop(MAIN_H, MAIN_W,      DROP3_ROW,   MAIN_COL),
-            Drop(MAIN_H, PIECE_END_W, MEETING_ROW, MEETING_COL),
+            Drop(MAIN_H, MAIN_W,       DROP1_ROW,   MAIN_COL),
+            Drop(MAIN_H, MAIN_W,       DROP2_ROW,   MAIN_COL),
+            Drop(MAIN_H, MAIN_W,       DROP3_ROW,   MAIN_COL),
+            Drop(MAIN_H, piece1_end_w, MEETING_ROW, MEETING_COL),
         ],
         debug_label="MERGE all three pieces at meeting point"
     )
@@ -274,19 +300,21 @@ def move_pieces_to_meet():
     input(f">>> Mix complete -- press Enter to unload")
 
 
-def move_piece_out():
+def move_piece_out(merged_w):
     """
     Moves the merged drop from MEETING_COL (col=55) to the chip edge (col=128).
     All three main bodies remain held during this step.
+
+    merged_w — width to use for the merged drop (piece1_end_w from CSV).
     """
     print(f"\nMoving merged drop from col={MEETING_COL} to col=128...")
     for col in range(MEETING_COL, 128):
         activate(
             [
-                Drop(MAIN_H, MAIN_W,      DROP1_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,      DROP2_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,      DROP3_ROW,   MAIN_COL),
-                Drop(MAIN_H, PIECE_END_W, MEETING_ROW, col),
+                Drop(MAIN_H, MAIN_W,    DROP1_ROW,   MAIN_COL),
+                Drop(MAIN_H, MAIN_W,    DROP2_ROW,   MAIN_COL),
+                Drop(MAIN_H, MAIN_W,    DROP3_ROW,   MAIN_COL),
+                Drop(MAIN_H, merged_w,  MEETING_ROW, col),
             ],
             debug_label=f"MOVE OUT piece at col={col}"
         )
@@ -294,6 +322,11 @@ def move_piece_out():
 
 
 def main():
+    # ── Load piece widths from CSV ─────────────────────────────────────────────
+    # Reads colormixcsv.xlsx row 2: piece_1 width | piece_2 width | piece_3 width
+    # Height is always MAIN_H=10 and is not read from the file.
+    piece1_end_w, piece2_end_w, piece3_end_w = load_piece_widths()
+
     microfluidics.InitUSB()
     res = microfluidics.OpenUSB()
     if res:
@@ -324,37 +357,40 @@ def main():
     print(f"Voltages: {v1.value} {v2.value} {v3.value} {v4.value} {v5.value} {v6.value} {v7.value} {v8.value} {v9.value}")
     input("Voltage query completed")
 
-    # ── Drop 1: row=55, col=5 ─────────────────────────────────────────────────
+    # ── Drop 1: row=55, col=2 ─────────────────────────────────────────────────
     split_and_move(
         row=DROP1_ROW,
         label="Drop 1 (row=55)",
         held_items=[],
+        piece_end_w=piece1_end_w,
         start_col=MAIN_COL
     )
     input(">>> Drop 1 holding -- press Enter to start Drop 2")
 
-    # ── Drop 2: row=105, col=5 ────────────────────────────────────────────────
+    # ── Drop 2: row=105, col=2 ────────────────────────────────────────────────
     split_and_move(
         row=DROP2_ROW,
         label="Drop 2 (row=105)",
-        held_items=[(DROP1_ROW, MAIN_COL)],
+        held_items=[(DROP1_ROW, MAIN_COL, piece1_end_w)],
+        piece_end_w=piece2_end_w,
         start_col=MAIN_COL
     )
     input(">>> Drop 2 holding -- press Enter to start Drop 3")
 
-    # ── Drop 3: row=5, col=10 ─────────────────────────────────────────────────
+    # ── Drop 3: row=10, col=2 ─────────────────────────────────────────────────
     split_and_move(
         row=DROP3_ROW,
-        label="Drop 3 (row=5)",
-        held_items=[(DROP1_ROW, MAIN_COL), (DROP2_ROW, MAIN_COL)],
+        label="Drop 3 (row=10)",
+        held_items=[(DROP1_ROW, MAIN_COL, piece1_end_w), (DROP2_ROW, MAIN_COL, piece2_end_w)],
+        piece_end_w=piece3_end_w,
         start_col=MAIN_COL
     )
 
     # ── Move all three pieces to meet, merge, and mix ─────────────────────────
-    move_pieces_to_meet()
+    move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w)
 
-    # ── Move merged drop to chip edge ─────────────────────────────────────────
-    move_piece_out()
+    # ── Move merged drop to chip edge (uses piece1's width for merged drop) ───
+    move_piece_out(merged_w=piece1_end_w)
     input(">>> Drop unloaded at chip edge — press Enter to finish")
 
     input(">>> Sequence complete -- press Enter to shut down")
