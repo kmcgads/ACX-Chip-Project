@@ -47,7 +47,7 @@ def activate(drops, debug_label=""):
 MAIN_H          = 10
 MAIN_W          = 15
 
-# Drop 1 and 2 — main body starts at col=5
+
 MAIN_COL        = 2
 DROP1_ROW       = 55
 DROP2_ROW       = 105
