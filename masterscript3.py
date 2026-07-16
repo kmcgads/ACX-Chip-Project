@@ -1,15 +1,15 @@
 """
 run_experiment.py
 ─────────────────
-Wrapper that runs the full mixing sequence (mdmixwithmerge) followed by
+Wrapper that runs the CSV-controlled mixing sequence (csvvolcont) followed by
 the camera capture (camera). Place this file in the same folder as both scripts:
     C:\\Users\\klmcg\\SULIProj\\ACX-CHIP-PROJECT\\
 
 Run with:
     python run_experiment.py
 
-Step 1: mdmixwithmerge.main() — full split/merge/mix sequence
-Step 2: CameraInterface       — takes picture and reports average color
+Step 1: csvvolcont.main() — CSV-controlled split/merge/mix sequence
+Step 2: CameraInterface   — takes picture and reports average color
 
 Note: camera.py has no main() function, so this wrapper imports CameraInterface
 directly and runs the same sequence as camera.py's __main__ block.
@@ -23,7 +23,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import mdmixwithmerge
+import csvvolcont
 from camera import CameraInterface
 
 
@@ -56,20 +56,20 @@ def run_camera():
 def main():
     print("=" * 60)
     print("EXPERIMENT SEQUENCE START")
-    print("  Step 1: mdmixwithmerge  →  Step 2: camera")
+    print("  Step 1: csvvolcont  →  Step 2: camera")
     print("=" * 60)
 
     # ── Step 1: Mixing sequence ───────────────────────────────────────────────
-    print("\n[1/2] Starting mdmixwithmerge...")
+    print("\n[1/2] Starting csvvolcont...")
     try:
-        mdmixwithmerge.main()
+        csvvolcont.main()
     except Exception as e:
-        print(f"\n[ERROR] mdmixwithmerge failed with exception: {e}")
+        print(f"\n[ERROR] csvvolcont failed with exception: {e}")
         print("Camera sequence will NOT run. Exiting.")
         sys.exit(1)
 
     # ── Step 2: Camera sequence ───────────────────────────────────────────────
-    print("\n[2/2] mdmixwithmerge complete. Starting camera...")
+    print("\n[2/2] csvvolcont complete. Starting camera...")
     try:
         run_camera()
     except Exception as e:
