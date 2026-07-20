@@ -300,25 +300,25 @@ def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
     input(f">>> Mix complete -- press Enter to unload")
 
 
-def move_piece_out(merged_w):
-    """
-    Moves the merged drop from MEETING_COL (col=55) to the chip edge (col=128).
-    All three main bodies remain held during this step.
+# def move_piece_out(merged_w):
+#     """
+#     Moves the merged drop from MEETING_COL (col=55) to the chip edge (col=128).
+#     All three main bodies remain held during this step.
 
-    merged_w — width to use for the merged drop (piece1_end_w from CSV).
-    """
-    print(f"\nMoving merged drop from col={MEETING_COL} to col=128...")
-    for col in range(MEETING_COL, 128):
-        activate(
-            [
-                Drop(MAIN_H, MAIN_W,    DROP1_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,    DROP2_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,    DROP3_ROW,   MAIN_COL),
-                Drop(MAIN_H, merged_w,  MEETING_ROW, col),
-            ],
-            debug_label=f"MOVE OUT piece at col={col}"
-        )
-        print(f"  piece at col={col}")
+#     merged_w — width to use for the merged drop (piece1_end_w from CSV).
+#     """
+#     print(f"\nMoving merged drop from col={MEETING_COL} to col=128...")
+#     for col in range(MEETING_COL, 128):
+#         activate(
+#             [
+#                 Drop(MAIN_H, MAIN_W,    DROP1_ROW,   MAIN_COL),
+#                 Drop(MAIN_H, MAIN_W,    DROP2_ROW,   MAIN_COL),
+#                 Drop(MAIN_H, MAIN_W,    DROP3_ROW,   MAIN_COL),
+#                 Drop(MAIN_H, merged_w,  MEETING_ROW, col),
+#             ],
+#             debug_label=f"MOVE OUT piece at col={col}"
+#         )
+#         print(f"  piece at col={col}")
 
 
 def main():
@@ -389,18 +389,18 @@ def main():
     # ── Move all three pieces to meet, merge, and mix ─────────────────────────
     move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w)
 
-    # ── Move merged drop to chip edge (uses piece1's width for merged drop) ───
-    move_piece_out(merged_w=piece1_end_w)
-    input(">>> Drop unloaded at chip edge — press Enter to finish")
+    # # ── Move merged drop to chip edge (uses piece1's width for merged drop) ───
+    # move_piece_out(merged_w=piece1_end_w)
+    # input(">>> Drop unloaded at chip edge — press Enter to finish")
 
     input(">>> Sequence complete -- press Enter to shut down")
 
-    # ── Shutdown ──────────────────────────────────────────────────────────────
-    microfluidics.ActivateElec(128, 128, 0, None)
-    time.sleep(0.5)
-    microfluidics.SetPower(False)
-    input("Power off completed")
-    microfluidics.CloseUSB()
+    # # ── Shutdown ──────────────────────────────────────────────────────────────
+    # microfluidics.ActivateElec(128, 128, 0, None)
+    # time.sleep(0.5)
+    # microfluidics.SetPower(False)
+    # input("Power off completed")
+    # microfluidics.CloseUSB()
 
 
 if __name__ == "__main__":
