@@ -2,14 +2,16 @@
 run_experiment.py
 ─────────────────
 Wrapper that runs the CSV-controlled mixing sequence (csvvolcont) followed by
-the camera capture (camera). Place this file in the same folder as both scripts:
+the camera capture (camera) and then the drop unload + reservoir reload (cleanreload).
+Place this file in the same folder as all three scripts:
     C:\\Users\\klmcg\\SULIProj\\ACX-CHIP-PROJECT\\
 
 Run with:
     python run_experiment.py
 
-Step 1: csvvolcont.main() — CSV-controlled split/merge/mix sequence
-Step 2: CameraInterface   — takes picture and reports average color
+Step 1: csvvolcont.main()  — CSV-controlled split/merge/mix sequence
+Step 2: CameraInterface    — takes picture and reports average color
+Step 3: cleanreload        — moves merged drop off chip, reloads reservoirs to 10×15
 
 Note: camera.py has no main() function, so this wrapper imports CameraInterface
 directly and runs the same sequence as camera.py's __main__ block.
@@ -25,6 +27,7 @@ if SCRIPT_DIR not in sys.path:
 
 import csvvolcont
 from camera import CameraInterface
+import cleanreload
 
 
 def run_camera():
@@ -36,17 +39,13 @@ def run_camera():
 
     cam = CameraInterface(camera_address=0)
 
+    frame_w, frame_h = cam.get_frame_size()
+
     print("Taking picture...")
     image_path, frame = cam.take_picture()
     print(f"Picture saved to: {image_path}")
 
-    color_result = cam.get_average_color_from_rectangle(
-        frame=frame,
-        x=200,
-        y=150,
-        width=100,
-        height=100,
-    )
+    color_result = cam.detect_drop_color(frame)
 
     print(f"Average RGB color: {color_result['rgb']}")
     print(f"Average BGR color: {color_result['bgr']}")
@@ -56,24 +55,34 @@ def run_camera():
 def main():
     print("=" * 60)
     print("EXPERIMENT SEQUENCE START")
-    print("  Step 1: csvvolcont  →  Step 2: camera")
+    print("  Step 1: csvvolcont  →  Step 2: camera  →  Step 3: cleanreload")
     print("=" * 60)
 
     # ── Step 1: Mixing sequence ───────────────────────────────────────────────
-    print("\n[1/2] Starting csvvolcont...")
+    print("\n[1/3] Starting csvvolcont...")
     try:
         csvvolcont.main()
     except Exception as e:
         print(f"\n[ERROR] csvvolcont failed with exception: {e}")
-        print("Camera sequence will NOT run. Exiting.")
+        print("Camera and cleanreload sequences will NOT run. Exiting.")
         sys.exit(1)
 
     # ── Step 2: Camera sequence ───────────────────────────────────────────────
-    print("\n[2/2] csvvolcont complete. Starting camera...")
+    print("\n[2/3] csvvolcont complete. Starting camera...")
     try:
         run_camera()
     except Exception as e:
         print(f"\n[ERROR] Camera sequence failed: {e}")
+        print("cleanreload sequence will NOT run. Exiting.")
+        sys.exit(1)
+
+    # ── Step 3: Move out merged drop + reload reservoirs ─────────────────────
+    print("\n[3/3] Camera complete. Starting cleanreload...")
+    try:
+        cleanreload.move_piece_out()
+        cleanreload.reload_reservoirs()
+    except Exception as e:
+        print(f"\n[ERROR] cleanreload failed: {e}")
         sys.exit(1)
 
     print("\n" + "=" * 60)
@@ -83,3 +92,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
