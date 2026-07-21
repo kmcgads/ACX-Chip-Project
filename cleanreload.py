@@ -4,7 +4,10 @@ cleanreload.py
 Runs after the colormix experiment (split/merge/mix) is complete.
 The merged drop must be sitting at row=55, col=55 before running this.
 
-  1. move_piece_out    — slides the merged drop col=55 → col=128 (off chip).
+  1. move_piece_out    — slides the merged drop:
+                           Phase 1: row=55 → row=75 at col=55
+                           Phase 2: col=55 → col=128 at row=75
+                           Phase 3: pinches from 25×25 → 1×1 at col=128
   2. reload_reservoirs — re-activates all three main bodies at 10×15 to
                          restore them after liquid lost during splitting.
 
@@ -63,21 +66,22 @@ DROP2_ROW   = 105
 DROP3_ROW   = 10
 MEETING_ROW = 55   # row where pieces merged (top edge)
 MEETING_COL = 55   # col where pieces merged
+MOVE_OUT_ROW = 75  # row to slide down to before moving off chip
 
 # Move-out shrink parameters
 MOVE_START_SIZE = 25   # starting height and width of merged drop
 MOVE_END_SIZE   = 1    # final height and width at chip edge (col=128)
-MOVE_STEPS      = 128 - MEETING_COL   # 73 steps
+MOVE_STEPS      = 128 - MEETING_COL   # 73 steps col=55 → col=128
 
 
 # ── Step 1: Move merged drop off chip ─────────────────────────────────────────
 
 def move_piece_out():
     """
-    Phase 1: Travels the merged drop from col=55 to col=128 as a full 25×25.
-    Phase 2: Pinches it down from 25×25 → 1×1 in place at col=128.
+    Phase 1: Slides the merged drop from row=55 → row=75 at col=55.
+    Phase 2: Travels the drop from col=55 → col=128 at row=75.
+    Phase 3: Pinches it down from 25×25 → 1×1 in place at col=128.
 
-    row=55 stays as the top edge throughout.
     All three main bodies stay held throughout.
     Press Ctrl+C to stop early once the drop is fully off chip.
     """
@@ -87,36 +91,51 @@ def move_piece_out():
         Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
     ]
 
-    # ── Phase 1: Travel at full 25×25 to col=128 ─────────────────────────────
-    print(f"\n[Step 1 — Phase 1] Traveling merged drop col={MEETING_COL} → 128 at {MOVE_START_SIZE}×{MOVE_START_SIZE}...")
-    print("  (Press Ctrl+C to stop early once the drop is fully off chip)")
+    # ── Phase 1: Slide drop from row=55 → row=75 at col=55 ───────────────────
+    row_steps = MOVE_OUT_ROW - MEETING_ROW   # 20 steps
+    print(f"\n[Step 1 — Phase 1] Sliding merged drop row={MEETING_ROW} → row={MOVE_OUT_ROW} at col={MEETING_COL}...")
 
     activate(
         mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, MEETING_ROW, MEETING_COL)],
-        debug_label=f"MOVE OUT start: {MOVE_START_SIZE}×{MOVE_START_SIZE} at col={MEETING_COL}"
+        debug_label=f"SLIDE DOWN start: {MOVE_START_SIZE}×{MOVE_START_SIZE} at row={MEETING_ROW} col={MEETING_COL}"
     )
-    input(f"\n>>> Merged drop at col={MEETING_COL}, {MOVE_START_SIZE}×{MOVE_START_SIZE} -- press Enter to travel to edge")
+    input(f"\n>>> Merged drop at row={MEETING_ROW}, col={MEETING_COL} -- press Enter to slide to row={MOVE_OUT_ROW}")
     time.sleep(1)
+
+    for i in range(1, row_steps + 1):
+        current_row = MEETING_ROW + i
+        activate(
+            mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, current_row, MEETING_COL)],
+            debug_label=f"SLIDE DOWN step={i} row={current_row}"
+        )
+        print(f"  row={current_row}, col={MEETING_COL}, drop={MOVE_START_SIZE}×{MOVE_START_SIZE}")
+
+    input(f"\n>>> Drop at row={MOVE_OUT_ROW}, col={MEETING_COL} -- press Enter to travel to edge")
+    time.sleep(1)
+
+    # ── Phase 2: Travel at full 25×25 from col=55 → col=128 at row=75 ────────
+    print(f"\n[Step 1 — Phase 2] Traveling merged drop col={MEETING_COL} → 128 at row={MOVE_OUT_ROW}, {MOVE_START_SIZE}×{MOVE_START_SIZE}...")
+    print("  (Press Ctrl+C to stop early once the drop is fully off chip)")
 
     for i in range(1, MOVE_STEPS + 1):
         current_col = MEETING_COL + i
         activate(
-            mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, MEETING_ROW, current_col)],
+            mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, MOVE_OUT_ROW, current_col)],
             debug_label=f"MOVE OUT travel step={i} col={current_col}"
         )
-        print(f"  col={current_col}, drop={MOVE_START_SIZE}×{MOVE_START_SIZE}")
+        print(f"  row={MOVE_OUT_ROW}, col={current_col}, drop={MOVE_START_SIZE}×{MOVE_START_SIZE}")
 
-    input(f"\n>>> Drop at col=128 -- press Enter to begin pinch")
+    input(f"\n>>> Drop at row={MOVE_OUT_ROW}, col=128 -- press Enter to begin pinch")
     time.sleep(1)
 
-    # ── Phase 2: Pinch from 25×25 → 1×1 at col=128 ───────────────────────────
-    print(f"\n[Step 1 — Phase 2] Pinching drop from {MOVE_START_SIZE}×{MOVE_START_SIZE} → {MOVE_END_SIZE}×{MOVE_END_SIZE} at col=128...")
+    # ── Phase 3: Pinch from 25×25 → 1×1 at col=128, row=75 ──────────────────
+    print(f"\n[Step 1 — Phase 3] Pinching drop from {MOVE_START_SIZE}×{MOVE_START_SIZE} → {MOVE_END_SIZE}×{MOVE_END_SIZE} at col=128...")
 
-    pinch_steps = MOVE_START_SIZE - MOVE_END_SIZE  # 24 steps
+    pinch_steps = MOVE_START_SIZE - MOVE_END_SIZE   # 24 steps
     for i in range(1, pinch_steps + 1):
         current_size = MOVE_START_SIZE - i
         activate(
-            mains + [Drop(current_size, current_size, MEETING_ROW, 128)],
+            mains + [Drop(current_size, current_size, MOVE_OUT_ROW, 128)],
             debug_label=f"PINCH step={i} size={current_size}×{current_size}"
         )
         print(f"  pinch step={i}, drop={current_size}×{current_size}")
