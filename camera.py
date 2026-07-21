@@ -197,7 +197,7 @@ if __name__ == "__main__":
     print("Starting camera script...")
 
     try:
-        camera = CameraInterface(camera_address=0)
+        camera = CameraInterface(camera_address=1)
 
         frame_w, frame_h = camera.get_frame_size()
 
