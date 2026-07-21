@@ -7,6 +7,9 @@ No camera, no chip movement — integrate into your master script.
 The optimizer knows nothing about the reservoir colors.
 It only sees: suggested widths → measured hex → DeltaE → next suggestion.
 
+Each trial, suggested widths are written to colormixcsv so your existing
+mix script can read them. Every result is also appended to optimization_log.csv.
+
 ─── Usage in your master script ───────────────────────────────────────────────
 
     from blind_bayesian_optimizer import BlindOptimizer, random_vivid_target_color
@@ -15,8 +18,8 @@ It only sees: suggested widths → measured hex → DeltaE → next suggestion.
     opt    = BlindOptimizer(target)
 
     for _ in range(opt.n_calls):
-        w1, w2, w3 = opt.ask()          # optimizer suggests widths
-        # ... write to CSV, run csvvolcont, measure with camera ...
+        w1, w2, w3 = opt.ask()          # writes widths to colormixcsv
+        # ... run csvvolcont, measure with camera ...
         converged = opt.tell("#ff8040")  # pass measured hex back
         if converged:
             break
@@ -30,6 +33,7 @@ It only sees: suggested widths → measured hex → DeltaE → next suggestion.
 from __future__ import annotations
 
 import colorsys
+import csv
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -46,12 +50,18 @@ from skopt.space import Real
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
 
-MAX_TOTAL_WIDTH     = 20     # Reservoir 1 + 2 + 3 widths always sum to this
-N_CALLS             = 25     # Total optimization trials
-N_INITIAL_POINTS    = 5      # Random trials before GP fitting begins
+MAX_TOTAL_WIDTH     = 15     # Reservoir 1 + 2 + 3 widths always sum to this
+MIN_WIDTH           = 2      # Minimum active width per reservoir (0 = excluded)
+MAX_WIDTH           = 13     # Maximum width per reservoir
+N_CALLS             = 5      # Total optimization trials
+N_INITIAL_POINTS    = 1      # Random trials before GP fitting begins
 CONVERGENCE_DELTA_E = 2.0    # DeltaE < this = visually identical, stop
 RANDOM_SEED         = 42
 LOG_DIR             = Path("experiment_logs")
+
+# CSV paths
+COLOR_MIX_CSV   = Path("colormixcsv.csv")       # existing mix script CSV
+OPT_LOG_CSV     = Path("optimization_log.csv")  # running trial history
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -192,11 +202,69 @@ def map_to_simplex(r1_raw: float, r2_raw: float) -> tuple[float, float, float]:
 def proportions_to_widths(
     p1: float, p2: float, p3: float, total: int = MAX_TOTAL_WIDTH
 ) -> tuple[int, int, int]:
-    """Convert proportions to integer piece widths summing to `total`. Min width = 1."""
-    w1 = max(1, round(p1 * total))
-    w2 = max(1, round(p2 * total))
-    w3 = max(1, total - w1 - w2)
-    return w1, w2, w3
+    """
+    Convert proportions to integer piece widths summing to `total`.
+    Valid per-reservoir values: 0 (excluded) or MIN_WIDTH–MAX_WIDTH.
+    Width of 1 is not allowed — anything that would round to 1 snaps to 0.
+    The largest active reservoir absorbs any rounding remainder.
+    """
+    raws = [p1 * total, p2 * total, p3 * total]
+
+    widths = []
+    for r in raws:
+        if r < 1.5:                          # would round to 0 or 1 → exclude
+            widths.append(0)
+        else:
+            widths.append(min(MAX_WIDTH, max(MIN_WIDTH, round(r))))
+
+    # Adjust the largest width so the total stays at MAX_TOTAL_WIDTH
+    diff = total - sum(widths)
+    if diff != 0:
+        idx = widths.index(max(widths))
+        adjusted = widths[idx] + diff
+        if adjusted == 1:                    # snap 1 → 0 after adjustment
+            adjusted = 0
+        widths[idx] = min(MAX_WIDTH, max(0, adjusted))
+
+    return tuple(widths)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CSV helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+COLOR_MIX_HEADERS = ["piece_1 width", "piece_2 width", "piece_3 width"]
+OPT_LOG_HEADERS   = ["trial", "piece_1 width", "piece_2 width", "piece_3 width",
+                      "measured_hex", "delta_e", "is_best", "timestamp"]
+
+
+def write_widths_to_csv(w1: int, w2: int, w3: int, path: Path = COLOR_MIX_CSV) -> None:
+    """Overwrite colormixcsv with the new suggested widths for this trial."""
+    with path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(COLOR_MIX_HEADERS)
+        writer.writerow([w1, w2, w3])
+    print(f"  [CSV] Written to {path}: piece_1={w1}  piece_2={w2}  piece_3={w3}")
+
+
+def append_trial_to_log(step: OptimizationStep, path: Path = OPT_LOG_CSV) -> None:
+    """Append one completed trial row to optimization_log.csv."""
+    write_header = not path.exists()
+    with path.open("a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(OPT_LOG_HEADERS)
+        writer.writerow([
+            step.iteration,
+            step.width_1,
+            step.width_2,
+            step.width_3,
+            step.result_hex,
+            round(step.delta_e, 4),
+            step.is_best,
+            step.timestamp,
+        ])
+    print(f"  [CSV] Trial {step.iteration} appended to {path}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -210,12 +278,16 @@ class BlindOptimizer:
     The optimizer is "blind" — it has no model of what colors the reservoirs
     contain. It learns purely from the DeltaE of each measured hex result.
 
+    Each call to ask() writes the suggested widths to colormixcsv so your
+    existing mix script can pick them up. Each call to tell() appends the
+    result to optimization_log.csv.
+
     Interface for master script
     ───────────────────────────
     opt = BlindOptimizer(target)
 
-    w1, w2, w3 = opt.ask()       → get next suggested widths
-    converged  = opt.tell(hex)   → feed measured hex back, returns True if done
+    w1, w2, w3 = opt.ask()       → get next widths (also writes to colormixcsv)
+    converged  = opt.tell(hex)   → feed measured hex back, logs to optimization_log.csv
     result     = opt.get_result() → OptimizationResult after loop ends
     opt.save_log(result)          → save JSON log
     """
@@ -233,6 +305,8 @@ class BlindOptimizer:
         convergence_delta_e:  float = CONVERGENCE_DELTA_E,
         random_seed:          int   = RANDOM_SEED,
         log_dir:              Path  = LOG_DIR,
+        color_mix_csv:        Path  = COLOR_MIX_CSV,
+        opt_log_csv:          Path  = OPT_LOG_CSV,
     ) -> None:
         self.target              = target
         self.n_calls             = n_calls
@@ -240,6 +314,8 @@ class BlindOptimizer:
         self.convergence_delta_e = convergence_delta_e
         self.random_seed         = random_seed
         self.log_dir             = Path(log_dir)
+        self.color_mix_csv       = Path(color_mix_csv)
+        self.opt_log_csv         = Path(opt_log_csv)
 
         self._skopt = Optimizer(
             dimensions       = self.SPACE,
@@ -253,7 +329,7 @@ class BlindOptimizer:
         self._iteration     = 0
         self._best_de       = float("inf")
         self._best_params:  list[float] = [0.33, 0.5]
-        self._pending:      Optional[list[float]] = None   # last ask() params
+        self._pending:      Optional[list[float]] = None
         self._converged     = False
 
     # ── ask ────────────────────────────────────────────────────────────────────
@@ -261,7 +337,7 @@ class BlindOptimizer:
     def ask(self) -> tuple[int, int, int]:
         """
         Ask the optimizer for the next suggested reservoir widths.
-        Returns (width_1, width_2, width_3) — integers summing to MAX_TOTAL_WIDTH.
+        Returns (width_1, width_2, width_3) and writes them to colormixcsv.
         Must be followed by a call to tell() before the next ask().
         """
         self._pending = self._skopt.ask()
@@ -272,9 +348,13 @@ class BlindOptimizer:
         phase = "RANDOM" if self._iteration <= self.n_initial_points else "GP-GUIDED"
         print(
             f"\n[Bayesian | Trial {self._iteration}/{self.n_calls} | {phase}]"
-            f"  Reservoir 1={w1}px  Reservoir 2={w2}px  Reservoir 3={w3}px"
-            f"  (total={w1+w2+w3}px)"
+            f"  piece_1={w1}  piece_2={w2}  piece_3={w3}"
+            f"  (total={w1+w2+w3})"
         )
+
+        # Write suggested widths to colormixcsv for your mix script to read
+        write_widths_to_csv(w1, w2, w3, path=self.color_mix_csv)
+
         return w1, w2, w3
 
     # ── tell ───────────────────────────────────────────────────────────────────
@@ -282,17 +362,17 @@ class BlindOptimizer:
     def tell(self, measured_hex: str) -> bool:
         """
         Feed the camera-measured hex color back to the optimizer.
+        Appends the trial result to optimization_log.csv.
 
         Parameters
         ----------
         measured_hex : str
-            Hex color string from camera.py (e.g. '#ff8040').
+            Hex color string from camera (e.g. '#ff8040').
 
         Returns
         -------
         bool
             True if convergence threshold was reached (DeltaE < CONVERGENCE_DELTA_E).
-            Your master script can use this to break the loop early.
         """
         if self._pending is None:
             raise RuntimeError("Call ask() before tell().")
@@ -319,6 +399,9 @@ class BlindOptimizer:
         self._history.append(step)
         self._skopt.tell(self._pending, de)
         self._pending = None
+
+        # Append this trial to the running CSV log
+        append_trial_to_log(step, path=self.opt_log_csv)
 
         marker = " ★ NEW BEST" if is_best else ""
         print(
@@ -387,8 +470,7 @@ class BlindOptimizer:
 def main() -> OptimizationResult:
     """
     Standalone loop — prompts you to manually enter the measured hex color
-    after each trial. Use this to test the optimizer logic without hardware,
-    or replace the input() call with your camera measurement in the master script.
+    after each trial. Use this to test the optimizer logic without hardware.
     """
     target = random_vivid_target_color(seed=RANDOM_SEED)
     print(f"\nTarget color: {target.hex}  rgb={target.r},{target.g},{target.b}")
@@ -398,17 +480,17 @@ def main() -> OptimizationResult:
     opt = BlindOptimizer(target)
 
     for _ in range(opt.n_calls):
-        opt.ask()
+        opt.ask()   # widths written to colormixcsv automatically
         hex_input = input("  Enter measured hex color (e.g. #ff8040): ").strip()
-        converged = opt.tell(hex_input)
+        converged = opt.tell(hex_input)   # result appended to optimization_log.csv
         if converged:
             break
 
     result = opt.get_result()
-    print(f"\nBest widths: R1={result.width_1}  R2={result.width_2}  R3={result.width_3}"
+    print(f"\nBest widths: piece_1={result.width_1}  piece_2={result.width_2}  piece_3={result.width_3}"
           f"  DeltaE={result.best_delta_e:.2f}  Converged={result.converged}")
 
-    save = input("\nSave log? [y/n]: ").strip().lower()
+    save = input("\nSave JSON log? [y/n]: ").strip().lower()
     if save == "y":
         opt.save_log(result)
 
