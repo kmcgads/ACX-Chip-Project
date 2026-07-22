@@ -1,142 +1,147 @@
 """
 run_experiment.py
 ─────────────────
-Wrapper that runs the Bayesian-optimized mixing sequence across multiple trials.
+Bayesian-optimized closed-loop color mixing experiment on DMF chip.
 
-Each trial follows this sequence:
-    Step 1: BlindOptimizer.ask()  — determines next widths, writes to colormixcsv
-    Step 2: csvvolcont.main()     — CSV-controlled split/merge/mix sequence
-    Step 3: CameraInterface       — takes picture and reports average color
-    Step 4: BlindOptimizer.tell() — scores measured hex, updates model
-    Step 5: cleanreload           — moves merged drop off chip, reloads reservoirs
+Each trial:
+  Step 1 — Bayesian suggests reservoir widths → writes to colormixcsv
+  Step 2 — csvvolcont mixes the drop on chip
+  Step 3 — Camera measures the resulting color
+  Step 4 — Bayesian scores it (DeltaE vs target), updates its model
+  Step 5 — Drop moved to graveyard, reservoirs reloaded
+  Repeat up to N_CALLS times, stops early if DeltaE < 2.0.
 
-The optimizer runs for up to N_CALLS trials, stopping early if DeltaE < 2.0.
-
-Place this file in the same folder as all scripts:
-    C:\\Users\\klmcg\\SULIProj\\ACX-CHIP-PROJECT\\
-
-Run with:
-    python run_experiment.py
+Place in: C:\\Users\\klmcg\\SULIProj\\ACX-CHIP-PROJECT\\
+Run with: python run_experiment.py
 """
 
 import sys
 import os
 
-# Ensure the script finds its siblings regardless of working directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 import csvvolcont
-from camera import CameraInterface
 import cleanreload
+from camera import CameraInterface
 from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 
+# ── Config ────────────────────────────────────────────────────────────────────
 
-def run_camera() -> str:
-    """
-    Runs the camera sequence and returns the measured hex color string.
-    Returns e.g. '#ff8040'
-    """
-    print("\n" + "=" * 60)
-    print("CAMERA SEQUENCE STARTING")
-    print("=" * 60)
-    print("Starting camera script...")
+CAMERA_INDEX = 1   # Change if microscope is on a different index
+RANDOM_SEED  = None   # None = different random target color every run
 
-    cam = CameraInterface(camera_address=0)
 
-    frame_w, frame_h = cam.get_frame_size()
+# ── Camera helper ─────────────────────────────────────────────────────────────
 
-    print("Taking picture...")
+def capture_color(cam: CameraInterface) -> str:
+    """Take a picture and return the measured hex color string."""
+    print("\n  [Camera] Taking picture...")
     image_path, frame = cam.take_picture()
-    print(f"Picture saved to: {image_path}")
-
+    print(f"  [Camera] Image saved: {image_path}")
     color_result = cam.detect_drop_color(frame)
+    print(f"  [Camera] Measured RGB : {color_result['rgb']}")
+    print(f"  [Camera] Measured hex : {color_result['hex']}")
+    return color_result['hex']
 
-    print(f"Average RGB color: {color_result['rgb']}")
-    print(f"Average BGR color: {color_result['bgr']}")
-    print(f"HEX color: {color_result['hex']}")
 
-    return color_result['hex']   # returned to Bayesian optimizer
-
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    print("=" * 60)
-    print("BAYESIAN OPTIMIZATION EXPERIMENT")
-    print("  Each trial: ask → csvvolcont → camera → tell → cleanreload")
-    print("=" * 60)
+    print("\n" + "=" * 65)
+    print("  BAYESIAN OPTIMIZATION EXPERIMENT — DMF Chip")
+    print("=" * 65)
 
-    # ── Optimizer setup ───────────────────────────────────────────────────────
-    target = random_vivid_target_color(seed=42)
-    opt    = BlindOptimizer(target)
-    print(f"\nTarget color: {target.hex}  rgb=({target.r}, {target.g}, {target.b})")
-    print(f"Running up to {opt.n_calls} trials  |  "
-          f"Trial 1 is random, rest are GP-guided\n")
+    # ── Setup ──────────────────────────────────────────────────────────────
+    target = random_vivid_target_color(seed=RANDOM_SEED)
 
-    # ── Trial loop ────────────────────────────────────────────────────────────
+    print(f"\n  Target color  : {target.hex}")
+    print(f"  Target RGB    : ({target.r}, {target.g}, {target.b})")
+    print(f"  Scoring metric: CIEDE2000 DeltaE  (< 2.0 = visually identical)")
+
+    cam = CameraInterface(camera_address=CAMERA_INDEX)
+    opt = BlindOptimizer(target)
+
+    print(f"  Trials        : {opt.n_calls}  |  Trial 1 = PRESET (5,5,5), rest = GP-guided")
+
+    # ── Trial loop ─────────────────────────────────────────────────────────
     for trial in range(opt.n_calls):
-        print(f"\n{'─' * 60}")
-        print(f"TRIAL {trial + 1} of {opt.n_calls}")
-        print(f"{'─' * 60}")
+        trial_number = trial + 1
 
-        # Step 1: Bayesian optimizer picks widths and writes to colormixcsv
-        try:
-            w1, w2, w3 = opt.ask()
-        except Exception as e:
-            print(f"\n[ERROR] Optimizer ask() failed: {e}")
-            sys.exit(1)
+        print(f"\n{'─' * 65}")
+        print(f"  TRIAL {trial_number} of {opt.n_calls}")
+        print(f"{'─' * 65}")
 
-        # Step 2: Mixing sequence reads colormixcsv and runs
-        print(f"\n[Step 2] Starting csvvolcont...")
-        try:
-            csvvolcont.main()
-        except Exception as e:
-            print(f"\n[ERROR] csvvolcont failed: {e}")
-            print("Stopping experiment.")
-            sys.exit(1)
+        # Step 1: Bayesian suggests widths → writes colormixcsv
+        phase = "PRESET (5,5,5)" if trial == 0 else "GP-GUIDED"
+        print(f"\n  [Step 1 | Bayesian | {phase}] Selecting reservoir widths...")
+        w1, w2, w3 = opt.ask()
 
-        # Step 3: Camera measures the mixed color
-        print(f"\n[Step 3] Starting camera...")
-        try:
-            measured_hex = run_camera()
-        except Exception as e:
-            print(f"\n[ERROR] Camera sequence failed: {e}")
-            print("Stopping experiment.")
-            sys.exit(1)
+        total = w1 + w2 + w3
+        pct = lambda w: f"{w/total*100:.1f}%" if total > 0 else "—"
+        print(f"\n  ┌─ Suggested widths ──────────────────────┐")
+        print(f"  │  piece_1 width : {w1:>3}  ({pct(w1)} of mix)    │")
+        print(f"  │  piece_2 width : {w2:>3}  ({pct(w2)} of mix)    │")
+        print(f"  │  piece_3 width : {w3:>3}  ({pct(w3)} of mix)    │")
+        print(f"  │  total         : {total:>3}                     │")
+        print(f"  └─────────────────────────────────────────┘")
 
-        # Step 4: Feed result back to Bayesian optimizer
-        print(f"\n[Step 4] Scoring result with Bayesian optimizer...")
-        try:
-            converged = opt.tell(measured_hex)
-        except Exception as e:
-            print(f"\n[ERROR] Optimizer tell() failed: {e}")
-            sys.exit(1)
+        # Step 2: Mix on chip
+        print(f"\n  [Step 2] Running csvvolcont (mixing drop on chip)...")
+        csvvolcont.main()
 
-        # Step 5: Clean up chip and reload reservoirs for next trial
-        print(f"\n[Step 5] Starting cleanreload...")
-        try:
-            cleanreload.move_piece_out()
-            cleanreload.reload_reservoirs()
-        except Exception as e:
-            print(f"\n[ERROR] cleanreload failed: {e}")
-            sys.exit(1)
+        # Step 3: Camera captures color
+        print(f"\n  [Step 3] Capturing mixed color...")
+        measured_hex = capture_color(cam)
 
-        # Stop early if color is close enough
+        # Step 4: Bayesian scores the result
+        print(f"\n  [Step 4] Scoring measured color against target...")
+        converged = opt.tell(measured_hex)
+
+        result_so_far = opt.get_result()
+        this_delta_e  = opt._history[-1].delta_e
+
+        print(f"\n  ┌─ Scoring ───────────────────────────────┐")
+        print(f"  │  Target hex    : {target.hex:<24}  │")
+        print(f"  │  Measured hex  : {measured_hex:<24}  │")
+        print(f"  │  DeltaE        : {this_delta_e:<6.2f}  (this trial)      │")
+        print(f"  │  Best DeltaE   : {result_so_far.best_delta_e:<6.2f}  (best so far)    │")
+        print(f"  │  Converged     : {str(converged):<24}  │")
+        print(f"  └─────────────────────────────────────────┘")
+        print(f"\n  How DeltaE works:")
+        print(f"    0–2   = visually identical  ✓")
+        print(f"    2–10  = noticeable difference")
+        print(f"    10+   = very different colors")
+
+        # Stop early if converged — no cleanreload needed
         if converged:
-            print(f"\n[CONVERGED] Stopping after trial {trial + 1}.")
+            print(f"\n  [CONVERGED] DeltaE < 2.0 — match found after {trial_number} trial(s)!")
             break
 
-    # ── Final result ──────────────────────────────────────────────────────────
+        # Step 5: Move drop to graveyard, reload reservoirs
+        print(f"\n  [Step 5] Moving drop to graveyard and reloading reservoirs...")
+        cleanreload.move_to_graveyard(trial_number=trial_number)
+        cleanreload.reload_reservoirs()
+
+        if trial < opt.n_calls - 1:
+            print(f"\n  Bayesian will use this score to suggest better widths next trial.")
+
+    # ── Final result ────────────────────────────────────────────────────────
     result = opt.get_result()
 
-    print("\n" + "=" * 60)
-    print("OPTIMIZATION COMPLETE")
-    print(f"  Best widths:  piece_1={result.width_1}  "
-          f"piece_2={result.width_2}  piece_3={result.width_3}")
-    print(f"  Best DeltaE:  {result.best_delta_e:.2f}")
-    print(f"  Converged:    {result.converged}")
-    print(f"  Target hex:   {result.target_hex}")
-    print("=" * 60)
+    print(f"\n{'=' * 65}")
+    print(f"  EXPERIMENT COMPLETE")
+    print(f"{'=' * 65}")
+    print(f"  Best widths found:")
+    print(f"    piece_1 = {result.width_1}")
+    print(f"    piece_2 = {result.width_2}")
+    print(f"    piece_3 = {result.width_3}")
+    print(f"  Best DeltaE  : {result.best_delta_e:.2f}")
+    print(f"  Converged    : {result.converged}")
+    print(f"  Target hex   : {result.target_hex}")
+    print(f"\n  Full trial history saved to: optimization_log.csv")
+    print(f"{'=' * 65}\n")
 
     opt.save_log(result)
 
