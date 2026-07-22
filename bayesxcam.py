@@ -42,7 +42,7 @@ CAMERA_INDEX = 1   # Change to 0 if microscope is on index 0
                    #       cap.release()
 
 N_TRIALS     = 5
-RANDOM_SEED  = 42
+RANDOM_SEED  = None   # None = different random target color each run
 
 
 # ── Camera helper ─────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ def main():
         print(f"{'─' * 65}")
 
         # Step 1: Bayesian suggests widths
-        phase = "RANDOM EXPLORATION" if trial == 0 else "GP-GUIDED"
+        phase = "PRESET (5,5,5)" if trial == 0 else "GP-GUIDED"
         print(f"\n  [Bayesian | {phase}] Suggesting reservoir widths...")
         w1, w2, w3 = opt.ask()
 
