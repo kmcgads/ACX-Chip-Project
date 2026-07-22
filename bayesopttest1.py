@@ -50,13 +50,14 @@ from skopt.space import Real
 # Configuration
 # ══════════════════════════════════════════════════════════════════════════════
 
-MAX_TOTAL_WIDTH     = 15     # Reservoir 1 + 2 + 3 widths always sum to this
-MIN_WIDTH           = 2      # Minimum active width per reservoir (0 = excluded)
-MAX_WIDTH           = 13     # Maximum width per reservoir
-N_CALLS             = 5      # Total optimization trials
-N_INITIAL_POINTS    = 1      # Random trials before GP fitting begins
+MAX_TOTAL_WIDTH     = 15          # Reservoir 1 + 2 + 3 widths always sum to this
+MIN_WIDTH           = 2           # Minimum active width per reservoir (0 = excluded)
+MAX_WIDTH           = 13          # Maximum width per reservoir
+PRESET_WIDTHS       = (5, 5, 5)  # Trial 1 always starts here (matches CSV default)
+N_CALLS             = 5           # Total optimization trials
+N_INITIAL_POINTS    = 1           # Random trials before GP fitting begins
 CONVERGENCE_DELTA_E = 2.0    # DeltaE < this = visually identical, stop
-RANDOM_SEED         = 42
+RANDOM_SEED         = None   # None = different random target color each run
 LOG_DIR             = Path("experiment_logs")
 
 # CSV paths
@@ -341,11 +342,17 @@ class BlindOptimizer:
         Must be followed by a call to tell() before the next ask().
         """
         self._pending = self._skopt.ask()
-        p1, p2, p3   = map_to_simplex(*self._pending)
-        w1, w2, w3   = proportions_to_widths(p1, p2, p3)
         self._iteration += 1
 
-        phase = "RANDOM" if self._iteration <= self.n_initial_points else "GP-GUIDED"
+        # Trial 1 always uses the preset widths to match the CSV default (5, 5, 5)
+        if self._iteration == 1:
+            w1, w2, w3 = PRESET_WIDTHS
+            phase = "PRESET"
+        else:
+            p1, p2, p3 = map_to_simplex(*self._pending)
+            w1, w2, w3 = proportions_to_widths(p1, p2, p3)
+            phase = "GP-GUIDED"
+
         print(
             f"\n[Bayesian | Trial {self._iteration}/{self.n_calls} | {phase}]"
             f"  piece_1={w1}  piece_2={w2}  piece_3={w3}"
@@ -469,20 +476,36 @@ class BlindOptimizer:
 
 def main() -> OptimizationResult:
     """
-    Standalone loop — prompts you to manually enter the measured hex color
-    after each trial. Use this to test the optimizer logic without hardware.
+    Standalone loop — takes a picture with the camera after each trial
+    and feeds the measured hex automatically to the Bayesian optimizer.
+    Set CAMERA_INDEX to whichever index your microscope is on.
     """
+    from camera import CameraInterface
+
+    CAMERA_INDEX = 1   # change if microscope is on a different index
+
     target = random_vivid_target_color(seed=RANDOM_SEED)
     print(f"\nTarget color: {target.hex}  rgb={target.r},{target.g},{target.b}")
     print(f"Trials: {N_CALLS}  |  Initial random: {N_INITIAL_POINTS}"
           f"  |  Converge at DeltaE < {CONVERGENCE_DELTA_E}\n")
 
+    cam = CameraInterface(camera_address=CAMERA_INDEX)
     opt = BlindOptimizer(target)
 
     for _ in range(opt.n_calls):
         opt.ask()   # widths written to colormixcsv automatically
-        hex_input = input("  Enter measured hex color (e.g. #ff8040): ").strip()
-        converged = opt.tell(hex_input)   # result appended to optimization_log.csv
+
+        input("  >>> Place color sample in front of camera, then press Enter to capture...")
+
+        print("  [Camera] Taking picture...")
+        image_path, frame = cam.take_picture()
+        print(f"  [Camera] Saved: {image_path}")
+
+        color_result = cam.detect_drop_color(frame)
+        measured_hex = color_result['hex']
+        print(f"  [Camera] Measured hex: {measured_hex}  rgb={color_result['rgb']}")
+
+        converged = opt.tell(measured_hex)   # result appended to optimization_log.csv
         if converged:
             break
 
