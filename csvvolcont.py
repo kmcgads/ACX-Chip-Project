@@ -72,7 +72,7 @@ MAIN_W          = 15
 
 # Drop 1 and 2 — main body starts at col=5
 MAIN_COL        = 2
-DROP1_ROW       = 65
+DROP1_ROW       = 45
 DROP2_ROW       = 115
 DROP3_ROW       = 10
 
