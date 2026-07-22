@@ -4,15 +4,21 @@ cleanreload.py
 Runs after the colormix experiment (split/merge/mix) is complete.
 The merged drop must be sitting at row=55, col=55 before running this.
 
-  1. move_piece_out    — slides the merged drop:
-                           Phase 1: row=55 → row=75 at col=55
-                           Phase 2: col=55 → col=128 at row=75
-                           Phase 3: pinches from 25×25 → 1×1 at col=128
-  2. reload_reservoirs — re-activates all three main bodies at 10×15 to
-                         restore them after liquid lost during splitting.
+  1. move_to_graveyard  — slides the merged drop right then down into the
+                          graveyard zone anchored at the bottom-right corner
+                          (row=128, col=128). The graveyard grows upward by
+                          DROP_SIZE each trial to hold accumulated liquid.
+  2. reload_reservoirs  — re-activates all three main bodies at 10×15 to
+                          restore them after liquid lost during splitting.
 
-The original code for this chip was written in C++ by ACX Instruments and
-adapted for Python using ctypes. The DLL is provided with the purchased device.
+─── Usage from master script ──────────────────────────────────────────────────
+
+    import cleanreload
+
+    cleanreload.move_to_graveyard(trial_number=1)
+    cleanreload.reload_reservoirs()
+
+────────────────────────────────────────────────────────────────────────────────
 """
 
 import ctypes
@@ -20,7 +26,7 @@ from ctypes import Structure
 import time
 import os
 
-__all__ = ["move_piece_out", "reload_reservoirs"]
+__all__ = ["move_to_graveyard", "reload_reservoirs"]
 
 # ── DLL load ──────────────────────────────────────────────────────────────────
 
@@ -64,26 +70,36 @@ MAIN_COL    = 2
 DROP1_ROW   = 55
 DROP2_ROW   = 105
 DROP3_ROW   = 10
-MEETING_ROW = 55   # row where pieces merged (top edge)
-MEETING_COL = 55   # col where pieces merged
-MOVE_OUT_ROW = 75  # row to slide down to before moving off chip
 
-# Move-out shrink parameters
-MOVE_START_SIZE = 25   # starting height and width of merged drop
-MOVE_END_SIZE   = 1    # final height and width at chip edge (col=128)
-MOVE_STEPS      = 128 - MEETING_COL   # 73 steps col=55 → col=128
+# Merged drop starting position after experiment
+MEETING_ROW = 55    # row where pieces merged (top edge)
+MEETING_COL = 55    # col where pieces merged
+DROP_SIZE   = 20    # merged drop is 20x20
+
+# Graveyard — bottom-right corner fixed at 128,128, grows upward each trial
+GRAVEYARD_WIDTH  = DROP_SIZE              # 20 cols wide
+GRAVEYARD_LEFT   = 128 - GRAVEYARD_WIDTH + 1   # col 109
+GRAVEYARD_BOTTOM = 128                    # row 128
 
 
-# ── Step 1: Move merged drop off chip ─────────────────────────────────────────
+# ── Step 1: Move merged drop to graveyard ─────────────────────────────────────
 
-def move_piece_out():
+def move_to_graveyard(trial_number: int) -> None:
     """
-    Phase 1: Slides the merged drop from row=55 → row=75 at col=55.
-    Phase 2: Travels the drop from col=55 → col=128 at row=75.
-    Phase 3: Pinches it down from 25×25 → 1×1 in place at col=128.
+    Moves the 20x20 merged drop from (row=55, col=55) into the graveyard zone
+    at the bottom-right corner (anchored at row=128, col=128).
 
-    All three main bodies stay held throughout.
-    Press Ctrl+C to stop early once the drop is fully off chip.
+    The graveyard grows upward by DROP_SIZE each trial:
+      Trial 1 → rows 109–128, cols 109–128  (20x20)
+      Trial 2 → rows  89–128, cols 109–128  (40x20)
+      Trial 3 → rows  69–128, cols 109–128  (60x20)
+
+    All three main reservoir bodies stay held throughout.
+
+    Parameters
+    ----------
+    trial_number : int
+        Which trial just completed (1-indexed).
     """
     mains = [
         Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
@@ -91,59 +107,58 @@ def move_piece_out():
         Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
     ]
 
-    # ── Phase 1: Slide drop from row=55 → row=75 at col=55 ───────────────────
-    row_steps = MOVE_OUT_ROW - MEETING_ROW   # 20 steps
-    print(f"\n[Step 1 — Phase 1] Sliding merged drop row={MEETING_ROW} → row={MOVE_OUT_ROW} at col={MEETING_COL}...")
+    # Graveyard geometry for this trial
+    graveyard_top    = GRAVEYARD_BOTTOM - trial_number * DROP_SIZE + 1
+    graveyard_height = trial_number * DROP_SIZE
+    drop_landing_row = graveyard_top    # new drop lands at top of graveyard zone
 
+    print(f"\n[Graveyard | Trial {trial_number}]")
+    print(f"  Drop start : row={MEETING_ROW}, col={MEETING_COL}, {DROP_SIZE}x{DROP_SIZE}")
+    print(f"  Landing    : row={drop_landing_row}, col={GRAVEYARD_LEFT}")
+    print(f"  Graveyard after merge: rows {graveyard_top}–{GRAVEYARD_BOTTOM}, "
+          f"cols {GRAVEYARD_LEFT}–128  ({graveyard_height}x{GRAVEYARD_WIDTH})")
+
+    # ── Phase 1: Slide drop RIGHT — col 55 → 109 ─────────────────────────────
+    print(f"\n[Step 1 — Phase 1] Moving drop right: col {MEETING_COL} → {GRAVEYARD_LEFT}...")
     activate(
-        mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, MEETING_ROW, MEETING_COL)],
-        debug_label=f"SLIDE DOWN start: {MOVE_START_SIZE}×{MOVE_START_SIZE} at row={MEETING_ROW} col={MEETING_COL}"
+        mains + [Drop(DROP_SIZE, DROP_SIZE, MEETING_ROW, MEETING_COL)],
+        debug_label=f"GRAVEYARD start: {DROP_SIZE}x{DROP_SIZE} at row={MEETING_ROW} col={MEETING_COL}"
     )
-    input(f"\n>>> Merged drop at row={MEETING_ROW}, col={MEETING_COL} -- press Enter to slide to row={MOVE_OUT_ROW}")
+    input(f"\n>>> Drop at row={MEETING_ROW}, col={MEETING_COL} -- press Enter to move right")
     time.sleep(1)
 
-    for i in range(1, row_steps + 1):
-        current_row = MEETING_ROW + i
+    for col in range(MEETING_COL + 1, GRAVEYARD_LEFT + 1):
         activate(
-            mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, current_row, MEETING_COL)],
-            debug_label=f"SLIDE DOWN step={i} row={current_row}"
+            mains + [Drop(DROP_SIZE, DROP_SIZE, MEETING_ROW, col)],
+            debug_label=f"MOVE RIGHT col={col}"
         )
-        print(f"  row={current_row}, col={MEETING_COL}, drop={MOVE_START_SIZE}×{MOVE_START_SIZE}")
+        print(f"  row={MEETING_ROW}, col={col}")
 
-    input(f"\n>>> Drop at row={MOVE_OUT_ROW}, col={MEETING_COL} -- press Enter to travel to edge")
+    input(f"\n>>> Drop at col={GRAVEYARD_LEFT} -- press Enter to move down")
     time.sleep(1)
 
-    # ── Phase 2: Travel at full 25×25 from col=55 → col=128 at row=75 ────────
-    print(f"\n[Step 1 — Phase 2] Traveling merged drop col={MEETING_COL} → 128 at row={MOVE_OUT_ROW}, {MOVE_START_SIZE}×{MOVE_START_SIZE}...")
-    print("  (Press Ctrl+C to stop early once the drop is fully off chip)")
+    # ── Phase 2: Slide drop DOWN — row 55 → graveyard top ────────────────────
+    print(f"\n[Step 1 — Phase 2] Moving drop down: row {MEETING_ROW} → {drop_landing_row}...")
 
-    for i in range(1, MOVE_STEPS + 1):
-        current_col = MEETING_COL + i
+    for row in range(MEETING_ROW + 1, drop_landing_row + 1):
         activate(
-            mains + [Drop(MOVE_START_SIZE, MOVE_START_SIZE, MOVE_OUT_ROW, current_col)],
-            debug_label=f"MOVE OUT travel step={i} col={current_col}"
+            mains + [Drop(DROP_SIZE, DROP_SIZE, row, GRAVEYARD_LEFT)],
+            debug_label=f"MOVE DOWN row={row}"
         )
-        print(f"  row={MOVE_OUT_ROW}, col={current_col}, drop={MOVE_START_SIZE}×{MOVE_START_SIZE}")
+        print(f"  row={row}, col={GRAVEYARD_LEFT}")
 
-    input(f"\n>>> Drop at row={MOVE_OUT_ROW}, col=128 -- press Enter to begin pinch")
+    input(f"\n>>> Drop at row={drop_landing_row}, col={GRAVEYARD_LEFT} -- press Enter to merge into graveyard")
     time.sleep(1)
 
-    # ── Phase 3: Pinch from 25×25 → 1×1 at col=128, row=75 ──────────────────
-    print(f"\n[Step 1 — Phase 3] Pinching drop from {MOVE_START_SIZE}×{MOVE_START_SIZE} → {MOVE_END_SIZE}×{MOVE_END_SIZE} at col=128...")
-
-    pinch_steps = MOVE_START_SIZE - MOVE_END_SIZE   # 24 steps
-    for i in range(1, pinch_steps + 1):
-        current_size = MOVE_START_SIZE - i
-        activate(
-            mains + [Drop(current_size, current_size, MOVE_OUT_ROW, 128)],
-            debug_label=f"PINCH step={i} size={current_size}×{current_size}"
-        )
-        print(f"  pinch step={i}, drop={current_size}×{current_size}")
-
-    # Drop fully pinched off — hold only the three main bodies
-    activate(mains, debug_label="MOVE OUT complete — drop pinched off")
-    print("  Merged drop unloaded.")
-    input("\n>>> Merged drop off chip -- press Enter to reload reservoirs")
+    # ── Phase 3: Merge — hold full graveyard area ─────────────────────────────
+    print(f"\n[Step 1 — Phase 3] Merging into graveyard "
+          f"(rows {graveyard_top}–{GRAVEYARD_BOTTOM}, cols {GRAVEYARD_LEFT}–128)...")
+    activate(
+        mains + [Drop(graveyard_height, GRAVEYARD_WIDTH, graveyard_top, GRAVEYARD_LEFT)],
+        debug_label=f"HOLD GRAVEYARD trial={trial_number} size={graveyard_height}x{GRAVEYARD_WIDTH}"
+    )
+    print(f"  Graveyard held: {graveyard_height}x{GRAVEYARD_WIDTH} at rows {graveyard_top}–{GRAVEYARD_BOTTOM}.")
+    input("\n>>> Graveyard held -- press Enter to reload reservoirs")
 
 
 # ── Step 2: Reload reservoirs to 10×15 ────────────────────────────────────────
@@ -182,9 +197,15 @@ def reload_reservoirs():
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    move_piece_out()
+    try:
+        trial = int(input("Enter trial number (1, 2, 3 ...): ").strip())
+    except ValueError:
+        print("Invalid trial number.")
+        return
+
+    move_to_graveyard(trial_number=trial)
     reload_reservoirs()
-    print("\n=== Done: drop unloaded, reservoirs at 10×15 ===")
+    print("\n=== Done: drop in graveyard, reservoirs at 10×15 ===")
 
 
 if __name__ == "__main__":
