@@ -49,12 +49,12 @@ START_COL      = 1
 START_HEIGHT   = CHIP_ROWS      # 128
 START_WIDTH    = CHIP_COLS      # 128
 
-# Target piece — 30x30 flush in the bottom-right corner
+# Target piece — 30x30 flush in the TOP-LEFT corner (row=1, col=1 fixed)
 TARGET_SIZE    = 30
-TARGET_ROW     = CHIP_ROWS - TARGET_SIZE + 1        # row=99, bottom edge flush at row=128
-TARGET_COL     = CHIP_COLS - TARGET_SIZE + 1        # col=99, right edge flush at col=128
+TARGET_ROW     = 1              # top-left corner, stays fixed
+TARGET_COL     = 1              # top-left corner, stays fixed
 
-# Deactivation: shrink left edge right and top edge down, bottom-right corner fixed
+# Shrink steps: from full chip down to TARGET_SIZE
 SHRINK_STEPS   = START_HEIGHT - TARGET_SIZE         # 98 steps (128 → 30)
 
 # Timing
@@ -109,53 +109,47 @@ def main():
         [Drop(START_HEIGHT, START_WIDTH, START_ROW, START_COL)],
         debug_label="FULL CHIP ACTIVATION"
     )
-    input(f"\n>>> Full chip activated ({CHIP_ROWS}x{CHIP_COLS}) -- press Enter to begin deactivation")
+    input(f"\n>>> Full chip activated ({CHIP_ROWS}x{CHIP_COLS}) -- press Enter to begin deactivation toward top-left")
 
-    # ── Step 2: Deactivate left and top edges toward bottom-right corner ──────
-    # Bottom edge fixed at row=128, right edge fixed at col=128.
-    # Each step: left edge moves right by 1, top edge moves down by 1.
-    print(f"\nDeactivating toward bottom-right corner over {SHRINK_STEPS} steps...")
+    # ── Step 2: Shrink toward top-left corner ─────────────────────────────────
+    # Top-left corner stays fixed at row=1, col=1.
+    # Each step: right edge moves left by 1, bottom edge moves up by 1.
+    print(f"\nShrinking toward top-left corner over {SHRINK_STEPS} steps...")
     for i in range(1, SHRINK_STEPS + 1):
-        current_width  = START_WIDTH  - i      # 127 → 30
         current_height = START_HEIGHT - i      # 127 → 30
-        current_col    = START_COL    + i      # 2   → 99
-        current_row    = START_ROW    + i      # 2   → 99
+        current_width  = START_WIDTH  - i      # 127 → 30
 
         activate(
-            [Drop(current_height, current_width, current_row, current_col)],
-            debug_label=f"DEACTIVATE step={i}/{SHRINK_STEPS} size={current_height}x{current_width} row={current_row} col={current_col}"
+            [Drop(current_height, current_width, TARGET_ROW, TARGET_COL)],
+            debug_label=f"SHRINK step={i}/{SHRINK_STEPS} size={current_height}x{current_width} row={TARGET_ROW} col={TARGET_COL}"
         )
         print(
             f"  step {i}: active area {current_height}x{current_width} "
-            f"| rows {current_row}–{current_row + current_height - 1}, "
-            f"cols {current_col}–{current_col + current_width - 1}"
+            f"| rows {TARGET_ROW}–{TARGET_ROW + current_height - 1}, "
+            f"cols {TARGET_COL}–{TARGET_COL + current_width - 1}"
         )
 
     input(
-        f"\n>>> Deactivation complete. {TARGET_SIZE}x{TARGET_SIZE} piece in bottom-right corner: "
+        f"\n>>> Shrink complete. {TARGET_SIZE}x{TARGET_SIZE} piece in top-left corner: "
         f"rows {TARGET_ROW}–{TARGET_ROW + TARGET_SIZE - 1}, "
         f"cols {TARGET_COL}–{TARGET_COL + TARGET_SIZE - 1} "
-        f"-- press Enter to begin optional further shrinking (or 's' + Enter to skip)"
+        f"-- press Enter to begin further shrinking"
     )
 
-    # ── Step 3: Optional further shrink (interactive, one step at a time) ────
-    # Bottom-right corner stays fixed as size decreases.
+    # ── Step 3: Optional further shrink (interactive, one step at a time) ─────
+    # Top-left corner stays fixed at row=1, col=1 as size decreases.
     current_size = TARGET_SIZE
-    current_col  = TARGET_COL
-    current_row  = TARGET_ROW
     print(f"\nFurther shrink mode: press Enter to shrink by 1, type 's' + Enter to stop.")
     while current_size > 1:
         user_input = input(f"  [{current_size}x{current_size}] Enter to shrink, 's' to stop: ")
         if user_input.strip().lower() == 's':
             break
         current_size -= 1
-        current_col   = CHIP_COLS - current_size + 1
-        current_row   = CHIP_ROWS - current_size + 1
         activate(
-            [Drop(current_size, current_size, current_row, current_col)],
-            debug_label=f"FURTHER SHRINK size={current_size}x{current_size} row={current_row} col={current_col}"
+            [Drop(current_size, current_size, TARGET_ROW, TARGET_COL)],
+            debug_label=f"FURTHER SHRINK size={current_size}x{current_size} row={TARGET_ROW} col={TARGET_COL}"
         )
-        print(f"  {current_size}x{current_size} at rows {current_row}–{current_row + current_size - 1}, cols {current_col}–{current_col + current_size - 1}")
+        print(f"  {current_size}x{current_size} at rows {TARGET_ROW}–{TARGET_ROW + current_size - 1}, cols {TARGET_COL}–{TARGET_COL + current_size - 1}")
 
     input(f"\n>>> Final size: {current_size}x{current_size} -- press Enter to shut down")
 
