@@ -29,15 +29,22 @@ from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CAMERA_INDEX  = 1      # Change if microscope is on a different index
-RANDOM_SEED   = None   # None = different random target color every run
-N_CALLS       = 5      # Number of trials to run (change this to control trials)
+CAMERA_INDEX   = 1      # Change if microscope is on a different index
+RANDOM_SEED    = None   # None = different random target color every run
+N_CALLS        = 5      # Number of trials to run (change this to control trials)
 
 # Must match the path csvvolcont.load_piece_widths() reads from
 COLOR_MIX_XLSX = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
 
 
-# ── Camera helper ─────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def wait(msg: str) -> None:
+    """Print a prompt and block until the user presses Enter."""
+    print(f"\n  {'─' * 59}")
+    input(f"  >>> {msg} — press Enter to continue")
+    print(f"  {'─' * 59}\n")
+
 
 def capture_color(cam: CameraInterface) -> str:
     """Take a picture and return the measured hex color string."""
@@ -49,8 +56,6 @@ def capture_color(cam: CameraInterface) -> str:
     print(f"  [Camera] Measured hex : {color_result['hex']}")
     return color_result['hex']
 
-
-# ── Width writer — writes optimizer widths directly to the xlsx csvvolcont reads ──
 
 def write_widths_to_xlsx(w1: int, w2: int, w3: int, path: str = COLOR_MIX_XLSX) -> None:
     """
@@ -87,24 +92,26 @@ def main():
 
     print(f"  Trials        : {opt.n_calls}  |  Trial 1 = PRESET (5,5,5), rest = GP-guided")
 
-    # ── One-time USB initialization — connection stays open for all trials ──
-    print(f"\n  [Setup] Initializing chip connection (once)...")
+    # ── One-time USB initialization ─────────────────────────────────────────
+    wait("Ready to initialize chip — confirm hardware is connected")
+    print(f"  [Setup] Initializing chip connection (once)...")
     csvvolcont.initialize()
+    print(f"  [Setup] Chip ready.")
 
-    # ── Trial loop ─────────────────────────────────────────────────────────
+    # ── Trial loop ──────────────────────────────────────────────────────────
     for trial in range(opt.n_calls):
         trial_number = trial + 1
 
-        print(f"\n{'─' * 65}")
+        print(f"\n{'═' * 65}")
         print(f"  TRIAL {trial_number} of {opt.n_calls}")
-        print(f"{'─' * 65}")
+        print(f"{'═' * 65}")
 
-        # Step 1: Bayesian suggests widths → write directly to colormixcsv.xlsx
+        # ── Step 1: Bayesian selects widths ────────────────────────────────
         phase = "PRESET (5,5,5)" if trial == 0 else "GP-GUIDED"
-        print(f"\n  [Step 1 | Bayesian | {phase}] Selecting reservoir widths...")
-        w1, w2, w3 = opt.ask()
+        wait(f"Begin Step 1 — Bayesian width selection ({phase})")
 
-        # Write to the xlsx that csvvolcont reads — keeps optimizer and chip in sync
+        print(f"  [Step 1 | Bayesian | {phase}] Selecting reservoir widths...")
+        w1, w2, w3 = opt.ask()
         write_widths_to_xlsx(w1, w2, w3)
 
         total = w1 + w2 + w3
@@ -115,17 +122,26 @@ def main():
         print(f"  │  piece_3 width : {w3:>3}  ({pct(w3)} of mix)    │")
         print(f"  │  total         : {total:>3}                     │")
         print(f"  └─────────────────────────────────────────┘")
+        print(f"  [Step 1] Complete.")
 
-        # Step 2: Mix on chip — reads widths from xlsx, connection already open
-        print(f"\n  [Step 2] Running csvvolcont (mixing drop on chip)...")
+        # ── Step 2: Mix on chip ─────────────────────────────────────────────
+        wait("Begin Step 2 — mix drop on chip")
+
+        print(f"  [Step 2] Running csvvolcont (mixing drop on chip)...")
         csvvolcont.main()
+        print(f"  [Step 2] Complete.")
 
-        # Step 3: Camera captures color
-        print(f"\n  [Step 3] Capturing mixed color...")
+        # ── Step 3: Camera captures color ───────────────────────────────────
+        wait("Begin Step 3 — capture mixed color with camera")
+
+        print(f"  [Step 3] Capturing mixed color...")
         measured_hex = capture_color(cam)
+        print(f"  [Step 3] Complete.")
 
-        # Step 4: Bayesian scores the result
-        print(f"\n  [Step 4] Scoring measured color against target...")
+        # ── Step 4: Bayesian scores the result ──────────────────────────────
+        wait(f"Begin Step 4 — score {measured_hex} against target {target.hex}")
+
+        print(f"  [Step 4] Scoring measured color against target...")
         converged = opt.tell(measured_hex)
 
         result_so_far = opt.get_result()
@@ -142,19 +158,24 @@ def main():
         print(f"    0–2   = visually identical  ✓")
         print(f"    2–10  = noticeable difference")
         print(f"    10+   = very different colors")
+        print(f"  [Step 4] Complete.")
 
-        # Stop early if converged — no cleanreload needed
+        # ── Early stop if converged ─────────────────────────────────────────
         if converged:
             print(f"\n  [CONVERGED] DeltaE < 2.0 — match found after {trial_number} trial(s)!")
             break
 
-        # Step 5: Move drop to graveyard, reload reservoirs
-        print(f"\n  [Step 5] Moving drop to graveyard and reloading reservoirs...")
+        # ── Step 5: Move drop to graveyard, reload reservoirs ───────────────
+        wait("Begin Step 5 — move drop to graveyard and reload reservoirs")
+
+        print(f"  [Step 5] Moving drop to graveyard and reloading reservoirs...")
         cleanreload.move_to_graveyard(trial_number=trial_number)
         cleanreload.reload_reservoirs()
+        print(f"  [Step 5] Complete.")
 
         if trial < opt.n_calls - 1:
             print(f"\n  Bayesian will use this score to suggest better widths next trial.")
+            wait(f"Trial {trial_number} done — ready to begin Trial {trial_number + 1}")
 
     # ── Final result ────────────────────────────────────────────────────────
     result = opt.get_result()
