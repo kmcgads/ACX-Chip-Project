@@ -4,7 +4,7 @@ run_experiment.py
 Bayesian-optimized closed-loop color mixing experiment on DMF chip.
 
 Each trial:
-  Step 1 — Bayesian suggests reservoir widths → writes to colormixcsv
+  Step 1 — Bayesian suggests reservoir widths → writes to colormixcsv.xlsx
   Step 2 — csvvolcont mixes the drop on chip
   Step 3 — Camera measures the resulting color
   Step 4 — Bayesian scores it (DeltaE vs target), updates its model
@@ -29,8 +29,12 @@ from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CAMERA_INDEX = 1   # Change if microscope is on a different index
-RANDOM_SEED  = None   # None = different random target color every run
+CAMERA_INDEX  = 1      # Change if microscope is on a different index
+RANDOM_SEED   = None   # None = different random target color every run
+N_CALLS       = 5      # Number of trials to run (change this to control trials)
+
+# Must match the path csvvolcont.load_piece_widths() reads from
+COLOR_MIX_XLSX = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
 
 
 # ── Camera helper ─────────────────────────────────────────────────────────────
@@ -44,6 +48,24 @@ def capture_color(cam: CameraInterface) -> str:
     print(f"  [Camera] Measured RGB : {color_result['rgb']}")
     print(f"  [Camera] Measured hex : {color_result['hex']}")
     return color_result['hex']
+
+
+# ── Width writer — writes optimizer widths directly to the xlsx csvvolcont reads ──
+
+def write_widths_to_xlsx(w1: int, w2: int, w3: int, path: str = COLOR_MIX_XLSX) -> None:
+    """
+    Writes the Bayesian-suggested widths into colormixcsv.xlsx so that
+    csvvolcont.load_piece_widths() picks up the correct values each trial.
+    Overwrites row 2, columns 1-3 in place.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    ws.cell(row=2, column=1).value = w1
+    ws.cell(row=2, column=2).value = w2
+    ws.cell(row=2, column=3).value = w3
+    wb.save(path)
+    print(f"  [XLSX] Widths written → piece_1={w1}, piece_2={w2}, piece_3={w3}  ({path})")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -61,9 +83,13 @@ def main():
     print(f"  Scoring metric: CIEDE2000 DeltaE  (< 2.0 = visually identical)")
 
     cam = CameraInterface(camera_address=CAMERA_INDEX)
-    opt = BlindOptimizer(target)
+    opt = BlindOptimizer(target, n_calls=N_CALLS)
 
     print(f"  Trials        : {opt.n_calls}  |  Trial 1 = PRESET (5,5,5), rest = GP-guided")
+
+    # ── One-time USB initialization — connection stays open for all trials ──
+    print(f"\n  [Setup] Initializing chip connection (once)...")
+    csvvolcont.initialize()
 
     # ── Trial loop ─────────────────────────────────────────────────────────
     for trial in range(opt.n_calls):
@@ -73,10 +99,13 @@ def main():
         print(f"  TRIAL {trial_number} of {opt.n_calls}")
         print(f"{'─' * 65}")
 
-        # Step 1: Bayesian suggests widths → writes colormixcsv
+        # Step 1: Bayesian suggests widths → write directly to colormixcsv.xlsx
         phase = "PRESET (5,5,5)" if trial == 0 else "GP-GUIDED"
         print(f"\n  [Step 1 | Bayesian | {phase}] Selecting reservoir widths...")
         w1, w2, w3 = opt.ask()
+
+        # Write to the xlsx that csvvolcont reads — keeps optimizer and chip in sync
+        write_widths_to_xlsx(w1, w2, w3)
 
         total = w1 + w2 + w3
         pct = lambda w: f"{w/total*100:.1f}%" if total > 0 else "—"
@@ -87,7 +116,7 @@ def main():
         print(f"  │  total         : {total:>3}                     │")
         print(f"  └─────────────────────────────────────────┘")
 
-        # Step 2: Mix on chip
+        # Step 2: Mix on chip — reads widths from xlsx, connection already open
         print(f"\n  [Step 2] Running csvvolcont (mixing drop on chip)...")
         csvvolcont.main()
 

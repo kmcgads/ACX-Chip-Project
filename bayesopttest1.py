@@ -12,10 +12,10 @@ mix script can read them. Every result is also appended to optimization_log.csv.
 
 ─── Usage in your master script ───────────────────────────────────────────────
 
-    from blind_bayesian_optimizer import BlindOptimizer, random_vivid_target_color
+    from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 
     target = random_vivid_target_color(seed=RANDOM_SEED)
-    opt    = BlindOptimizer(target)
+    opt    = BlindOptimizer(target, n_calls=N_CALLS)
 
     for _ in range(opt.n_calls):
         w1, w2, w3 = opt.ask()          # writes widths to colormixcsv
@@ -54,10 +54,10 @@ MAX_TOTAL_WIDTH     = 15          # Reservoir 1 + 2 + 3 widths always sum to thi
 MIN_WIDTH           = 2           # Minimum active width per reservoir (0 = excluded)
 MAX_WIDTH           = 13          # Maximum width per reservoir
 PRESET_WIDTHS       = (5, 5, 5)  # Trial 1 always starts here (matches CSV default)
-N_CALLS             = 5           # Total optimization trials
+N_CALLS             = 5           # Default trials — overridden by master script via n_calls=
 N_INITIAL_POINTS    = 1           # Random trials before GP fitting begins
-CONVERGENCE_DELTA_E = 2.0    # DeltaE < this = visually identical, stop
-RANDOM_SEED         = None   # None = different random target color each run
+CONVERGENCE_DELTA_E = 2.0         # DeltaE < this = visually identical, stop
+RANDOM_SEED         = None        # None = different random target color each run
 LOG_DIR             = Path("experiment_logs")
 
 # CSV paths
@@ -236,7 +236,7 @@ def proportions_to_widths(
 
 COLOR_MIX_HEADERS = ["piece_1 width", "piece_2 width", "piece_3 width"]
 OPT_LOG_HEADERS   = ["trial", "piece_1 width", "piece_2 width", "piece_3 width",
-                      "measured_hex", "delta_e", "is_best", "timestamp"]
+                      "target_hex", "measured_hex", "delta_e", "is_best", "timestamp"]
 
 
 def write_widths_to_csv(w1: int, w2: int, w3: int, path: Path = COLOR_MIX_CSV) -> None:
@@ -248,7 +248,7 @@ def write_widths_to_csv(w1: int, w2: int, w3: int, path: Path = COLOR_MIX_CSV) -
     print(f"  [CSV] Written to {path}: piece_1={w1}  piece_2={w2}  piece_3={w3}")
 
 
-def append_trial_to_log(step: OptimizationStep, path: Path = OPT_LOG_CSV) -> None:
+def append_trial_to_log(step: OptimizationStep, target_hex: str, path: Path = OPT_LOG_CSV) -> None:
     """Append one completed trial row to optimization_log.csv."""
     write_header = not path.exists()
     with path.open("a", newline="") as f:
@@ -260,6 +260,7 @@ def append_trial_to_log(step: OptimizationStep, path: Path = OPT_LOG_CSV) -> Non
             step.width_1,
             step.width_2,
             step.width_3,
+            target_hex,
             step.result_hex,
             round(step.delta_e, 4),
             step.is_best,
@@ -285,10 +286,10 @@ class BlindOptimizer:
 
     Interface for master script
     ───────────────────────────
-    opt = BlindOptimizer(target)
+    opt = BlindOptimizer(target, n_calls=N_CALLS)
 
-    w1, w2, w3 = opt.ask()       → get next widths (also writes to colormixcsv)
-    converged  = opt.tell(hex)   → feed measured hex back, logs to optimization_log.csv
+    w1, w2, w3 = opt.ask()        → get next widths (also writes to colormixcsv)
+    converged  = opt.tell(hex)    → feed measured hex back, logs to optimization_log.csv
     result     = opt.get_result() → OptimizationResult after loop ends
     opt.save_log(result)          → save JSON log
     """
@@ -310,7 +311,7 @@ class BlindOptimizer:
         opt_log_csv:          Path  = OPT_LOG_CSV,
     ) -> None:
         self.target              = target
-        self.n_calls             = n_calls
+        self.n_calls             = n_calls          # controlled by master script via N_CALLS
         self.n_initial_points    = n_initial_points
         self.convergence_delta_e = convergence_delta_e
         self.random_seed         = random_seed
@@ -331,6 +332,7 @@ class BlindOptimizer:
         self._best_de       = float("inf")
         self._best_params:  list[float] = [0.33, 0.5]
         self._pending:      Optional[list[float]] = None
+        self._last_widths:  Optional[tuple[int, int, int]] = None   # actual widths sent to chip
         self._converged     = False
 
     # ── ask ────────────────────────────────────────────────────────────────────
@@ -359,6 +361,9 @@ class BlindOptimizer:
             f"  (total={w1+w2+w3})"
         )
 
+        # Store the actual widths sent to the chip so tell() logs the right values
+        self._last_widths = (w1, w2, w3)
+
         # Write suggested widths to colormixcsv for your mix script to read
         write_widths_to_csv(w1, w2, w3, path=self.color_mix_csv)
 
@@ -383,6 +388,8 @@ class BlindOptimizer:
         """
         if self._pending is None:
             raise RuntimeError("Call ask() before tell().")
+        if self._last_widths is None:
+            raise RuntimeError("ask() did not store widths — internal error.")
 
         color   = hex_to_color(measured_hex)
         de      = delta_e_ciede2000(color, self.target)
@@ -392,8 +399,10 @@ class BlindOptimizer:
             self._best_de     = de
             self._best_params = self._pending
 
+        # Use the actual widths that were sent to the chip (set in ask())
+        # NOT a recalculation from GP params — those differ from the preset on trial 1
+        w1, w2, w3 = self._last_widths
         p1, p2, p3 = map_to_simplex(*self._pending)
-        w1, w2, w3 = proportions_to_widths(p1, p2, p3)
 
         step = OptimizationStep(
             iteration  = self._iteration,
@@ -408,7 +417,7 @@ class BlindOptimizer:
         self._pending = None
 
         # Append this trial to the running CSV log
-        append_trial_to_log(step, path=self.opt_log_csv)
+        append_trial_to_log(step, target_hex=self.target.hex, path=self.opt_log_csv)
 
         marker = " ★ NEW BEST" if is_best else ""
         print(
@@ -490,7 +499,7 @@ def main() -> OptimizationResult:
           f"  |  Converge at DeltaE < {CONVERGENCE_DELTA_E}\n")
 
     cam = CameraInterface(camera_address=CAMERA_INDEX)
-    opt = BlindOptimizer(target)
+    opt = BlindOptimizer(target, n_calls=N_CALLS)
 
     for _ in range(opt.n_calls):
         opt.ask()   # widths written to colormixcsv automatically
