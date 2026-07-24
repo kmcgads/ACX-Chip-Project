@@ -5,10 +5,10 @@
 Traditional experimentation can be time-consuming, resource-intensive, and subject to human error, making large experimental search spaces difficult to explore efficiently. This project investigated the use of autonomous experimentation and digital microfluidics to reduce experimentation time, improve consistency, and lower the material and energy costs of scientific research. An automated digital microfluidic (AM-DMF) device from ACX Instruments was used to move dyed water droplets and recreate the color-mixing experiment developed in Argonne National Laboratory's Rapid Prototyping Laboratory (RPL). A Python program used a camera to measure the resulting color after each experiment and applied Bayesian optimization to determine the next color mixture. The autonomous workflow successfully demonstrated closed-loop decision making and established a foundation for applying digital microfluidics, robotics, and machine learning to more complex microscale experiments.
 
 ## Example Diagram of a Closed-Loop Autonomous Work Flow
-![Screenshot](screenshot2.png)
+![Closed-Loop Workflow Diagram](images/closed-loop-workflow-diagram.png)
 
 ## Diagram of the system and its interaction with the code:
-![AM-DMF Python Script Steps](am-dmf-steps.png)
+![AM-DMF Python Script Steps](images/am-dmf-steps.png)
  
 
 ## Breakdown of the software at work: 
