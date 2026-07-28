@@ -16,13 +16,17 @@ loaded.
     csvvolcont.initialize()   # call ONCE at the start — opens USB, sets power/voltage
     ...
     csvvolcont.main()         # call each trial — loads CSV widths, runs mix sequence
-    ...
 
 IMPORTANT — Connection management
 ──────────────────────────────────
 initialize() opens the USB connection. It must NOT be called again between
 trials — the connection stays open for the entire experiment. main() does NOT
 open or close the USB connection.
+
+IMPORTANT — Always-on electrodes
+──────────────────────────────────
+RESERVOIRS and GRAVEYARD are included in every activate() call automatically.
+Do not manually add them to activate calls — they are prepended via BASE_DROPS.
 ────────────────────────────────────────────────────────────────────────────────
 """
 
@@ -49,22 +53,41 @@ class Drop(Structure):
     ]
 
 
-def activate(drops, debug_label=""):
-    """Send an electrode activation command over the existing open connection."""
-    n   = len(drops)
-    arr = (Drop * n)(*drops)
-    print(f"\n--- ACTIVATE CALL: {debug_label} ---")
-    print(f"    Total drops sent to device: {n}")
-    for idx, d in enumerate(drops):
-        print(
-            f"    Drop[{idx}]: "
-            f"row={d.row}, col={d.col}, "
-            f"height={d.height}, width={d.width} "
-            f"| covers rows {d.row}–{d.row + d.height - 1}, "
-            f"cols {d.col}–{d.col + d.width - 1}"
-        )
-    microfluidics.ActivateElec(128, 128, n, arr)
-    time.sleep(0.5)
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+MAIN_H          = 10
+MAIN_W          = 15
+MAIN_COL        = 2
+DROP1_ROW       = 75
+DROP2_ROW       = 115
+DROP3_ROW       = 25
+
+PIECE_START_COL = 30
+PIECE_START_W   = 10
+STRETCH_STEPS   = 25
+PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55
+
+MEETING_ROW     = DROP1_ROW        # row=75
+MEETING_COL     = PIECE_FINAL_COL  # col=55
+
+# ── Always-on electrodes — included in every activate() call ──────────────────
+
+# Reservoirs: three main bodies held at fixed positions throughout
+RESERVOIRS = [
+    Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
+    Drop(MAIN_H, MAIN_W, DROP2_ROW, MAIN_COL),
+    Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
+]
+
+# Graveyard: fixed 30x30 zone in the bottom-right corner of the chip
+GRAVEYARD_H   = 30
+GRAVEYARD_W   = 30
+GRAVEYARD_ROW = 128 - GRAVEYARD_H + 1   # = 99
+GRAVEYARD_COL = 128 - GRAVEYARD_W + 1   # = 99
+GRAVEYARD     = Drop(GRAVEYARD_H, GRAVEYARD_W, GRAVEYARD_ROW, GRAVEYARD_COL)
+
+# Prepended to every activate() call — never modify this directly
+BASE_DROPS = RESERVOIRS + [GRAVEYARD]
 
 
 # ── CSV loader ────────────────────────────────────────────────────────────────
@@ -84,36 +107,42 @@ def load_piece_widths(filepath=CSV_PATH):
     piece2_end_w = int(ws.cell(row=2, column=2).value)
     piece3_end_w = int(ws.cell(row=2, column=3).value)
     print(f"\n[CSV] Loaded piece end-widths from: {filepath}")
-    print(f"      piece_1 width={piece1_end_w}, piece_2 width={piece2_end_w}, piece_3 width={piece3_end_w}")
-    print(f"      Height is fixed at {MAIN_H} for all drops.\n")
+    print(f"      piece_1={piece1_end_w}, piece_2={piece2_end_w}, piece_3={piece3_end_w}")
+    print(f"      Height fixed at {MAIN_H} for all drops.\n")
     return piece1_end_w, piece2_end_w, piece3_end_w
 
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Core activate — always includes RESERVOIRS + GRAVEYARD ───────────────────
 
-MAIN_H          = 10
-MAIN_W          = 15
-MAIN_COL        = 2
-DROP1_ROW       = 75
-DROP2_ROW       = 115
-DROP3_ROW       = 25
+def activate(drops, debug_label=""):
+    """
+    Send an electrode activation command. RESERVOIRS and GRAVEYARD are
+    automatically prepended — do not add them manually to calls.
+    """
+    all_drops = list(BASE_DROPS) + list(drops)
+    n         = len(all_drops)
+    arr       = (Drop * n)(*all_drops)
 
-PIECE_START_COL = 30
-PIECE_START_W   = 10
-STRETCH_STEPS   = 25
-PIECE_FINAL_COL = PIECE_START_COL + STRETCH_STEPS  # col=55
+    print(f"\n--- ACTIVATE CALL: {debug_label} ---")
+    print(f"    Total drops sent to device: {n}  (includes {len(BASE_DROPS)} base drops)")
+    for idx, d in enumerate(all_drops):
+        print(
+            f"    Drop[{idx}]: "
+            f"row={d.row}, col={d.col}, "
+            f"height={d.height}, width={d.width} "
+            f"| covers rows {d.row}–{d.row + d.height - 1}, "
+            f"cols {d.col}–{d.col + d.width - 1}"
+        )
+    microfluidics.ActivateElec(128, 128, n, arr)
+    time.sleep(0.5)
 
-MEETING_ROW     = DROP1_ROW        # row=55
-MEETING_COL     = PIECE_FINAL_COL  # col=55
 
-
-# ── One-time USB initialization — call from master script at startup ───────────
+# ── One-time USB initialization ───────────────────────────────────────────────
 
 def initialize():
     """
     Opens the USB connection, sets power and voltage.
-    Call this ONCE at the start of the experiment — NOT between trials.
-    The connection stays open until the experiment ends.
+    Call ONCE at the start — NOT between trials.
     """
     print("\n[csvvolcont] Initializing USB connection...")
     microfluidics.InitUSB()
@@ -129,7 +158,6 @@ def initialize():
     microfluidics.SetPower(True)
     print("[csvvolcont] Power on.")
 
-    # Explicitly cast to c_int so ctypes passes the correct C type to the DLL
     microfluidics.SetVolt(
         ctypes.c_int(45), ctypes.c_int(45), ctypes.c_int(45),
         ctypes.c_int(0),  ctypes.c_int(0),  ctypes.c_int(0),
@@ -137,7 +165,7 @@ def initialize():
     )
     print("[csvvolcont] Voltage set.")
 
-    time.sleep(0.3)   # small delay so DLL has time to apply before querying
+    time.sleep(0.3)
 
     v1 = ctypes.c_int(0); v2 = ctypes.c_int(0); v3 = ctypes.c_int(0)
     v4 = ctypes.c_int(0); v5 = ctypes.c_int(0); v6 = ctypes.c_int(0)
@@ -150,14 +178,14 @@ def initialize():
     print(f"[csvvolcont] Voltages confirmed: "
           f"{v1.value} {v2.value} {v3.value} {v4.value} {v5.value} "
           f"{v6.value} {v7.value} {v8.value} {v9.value}")
-    # Allow ±2V tolerance — the DLL may round internally (e.g. 45 → 46)
+
     VOLT_TARGET    = 45
     VOLT_TOLERANCE = 2
     for label, v in [("CH1", v1), ("CH2", v2), ("CH3", v3)]:
         if abs(v.value - VOLT_TARGET) > VOLT_TOLERANCE:
             raise RuntimeError(
                 f"[csvvolcont] Voltage verification failed on {label} — "
-                f"expected ~{VOLT_TARGET}V, got {v.value}V. Check DLL argument types."
+                f"expected ~{VOLT_TARGET}V, got {v.value}V."
             )
     print(f"[csvvolcont] Voltage verification passed (tolerance ±{VOLT_TOLERANCE}V).")
     print("[csvvolcont] Initialization complete.\n")
@@ -165,22 +193,20 @@ def initialize():
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def held_drops(held_items):
+def held_pieces(held_items):
     """
-    held_items: list of (row, main_col, piece_end_w) tuples for each drop currently held.
-    Returns a list of Drop objects — one main body and one piece per held drop.
+    Returns piece drops for already-split drops.
+    Mains are excluded — they are always held via RESERVOIRS in BASE_DROPS.
+
+    held_items: list of (row, main_col, piece_end_w) tuples.
     """
-    drops = []
-    for r, mc, piece_end_w in held_items:
-        drops.append(Drop(MAIN_H, MAIN_W,       r, mc))
-        drops.append(Drop(MAIN_H, piece_end_w,  r, PIECE_FINAL_COL))
-    return drops
+    return [Drop(MAIN_H, piece_end_w, r, PIECE_FINAL_COL) for r, mc, piece_end_w in held_items]
 
 
 def split_and_move(row, label, held_items, piece_end_w, start_col=None):
     """
     Loads, stretches, splits, and moves a drop's piece to PIECE_FINAL_COL.
-    Each sub-step requires the user to press Enter before proceeding.
+    Reservoirs and graveyard are held automatically via activate().
     """
     if start_col is None:
         start_col = MAIN_COL
@@ -192,7 +218,7 @@ def split_and_move(row, label, held_items, piece_end_w, start_col=None):
     input(f"\n>>> [{label}] Ready to LOAD drop at row={row}, col={start_col} — press Enter")
     print(f"[{label}] Loading drop...")
     activate(
-        held_drops(held_items) + [Drop(MAIN_H, 20, row, start_col)],
+        held_pieces(held_items) + [Drop(MAIN_H, 20, row, start_col)],
         debug_label=f"{label} LOAD"
     )
     time.sleep(1)
@@ -203,7 +229,7 @@ def split_and_move(row, label, held_items, piece_end_w, start_col=None):
     time.sleep(2)
     for i in range(1, 16):
         activate(
-            held_drops(held_items) + [Drop(MAIN_H, 20 + i, row, start_col)],
+            held_pieces(held_items) + [Drop(MAIN_H, 20 + i, row, start_col)],
             debug_label=f"{label} STRETCH width={20 + i}"
         )
 
@@ -216,7 +242,7 @@ def split_and_move(row, label, held_items, piece_end_w, start_col=None):
         bridge_width = neck_gap   - gap
         if bridge_width > 0:
             activate(
-                held_drops(held_items) + [
+                held_pieces(held_items) + [
                     Drop(MAIN_H, MAIN_W,        row, start_col),
                     Drop(MAIN_H, bridge_width,  row, bridge_col),
                     Drop(MAIN_H, PIECE_START_W, row, PIECE_START_COL),
@@ -225,7 +251,7 @@ def split_and_move(row, label, held_items, piece_end_w, start_col=None):
             )
         else:
             activate(
-                held_drops(held_items) + [
+                held_pieces(held_items) + [
                     Drop(MAIN_H, MAIN_W,        row, start_col),
                     Drop(MAIN_H, PIECE_START_W, row, PIECE_START_COL),
                 ],
@@ -240,9 +266,9 @@ def split_and_move(row, label, held_items, piece_end_w, start_col=None):
         current_col   = PIECE_START_COL + i
         current_width = round(PIECE_START_W - (PIECE_START_W - piece_end_w) * i / STRETCH_STEPS)
         activate(
-            held_drops(held_items) + [
-                Drop(MAIN_H, MAIN_W,         row, start_col),
-                Drop(MAIN_H, current_width,  row, current_col),
+            held_pieces(held_items) + [
+                Drop(MAIN_H, MAIN_W,        row, start_col),
+                Drop(MAIN_H, current_width, row, current_col),
             ],
             debug_label=f"{label} MOVE col={current_col} width={current_width}"
         )
@@ -256,18 +282,18 @@ def split_and_move(row, label, held_items, piece_end_w, start_col=None):
         bridge_width = release_col - neck_start
         if bridge_width > 0:
             activate(
-                held_drops(held_items) + [
-                    Drop(MAIN_H, MAIN_W,        row, start_col),
-                    Drop(MAIN_H, bridge_width,  row, neck_start),
-                    Drop(MAIN_H, piece_end_w,   row, PIECE_FINAL_COL),
+                held_pieces(held_items) + [
+                    Drop(MAIN_H, MAIN_W,       row, start_col),
+                    Drop(MAIN_H, bridge_width, row, neck_start),
+                    Drop(MAIN_H, piece_end_w,  row, PIECE_FINAL_COL),
                 ],
                 debug_label=f"{label} DEACTIVATE col={release_col}"
             )
         else:
             activate(
-                held_drops(held_items) + [
-                    Drop(MAIN_H, MAIN_W,       row, start_col),
-                    Drop(MAIN_H, piece_end_w,  row, PIECE_FINAL_COL),
+                held_pieces(held_items) + [
+                    Drop(MAIN_H, MAIN_W,      row, start_col),
+                    Drop(MAIN_H, piece_end_w, row, PIECE_FINAL_COL),
                 ],
                 debug_label=f"{label} DEACTIVATE FINAL"
             )
@@ -280,8 +306,9 @@ def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
     """
     Moves all three pieces simultaneously toward MEETING_ROW, MEETING_COL,
     merges them, then runs the full mixing sequence.
+    Reservoirs and graveyard held automatically via activate().
     """
-    steps_to_meet = DROP2_ROW - MEETING_ROW   # 50 steps
+    steps_to_meet = DROP2_ROW - MEETING_ROW   # 40 steps
 
     input(f"\n>>> All three drops split — ready to MOVE PIECES TO MEET at row={MEETING_ROW}, col={MEETING_COL} — press Enter")
     print(f"[Mix] Moving pieces to meet...")
@@ -291,9 +318,6 @@ def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
         piece3_row = DROP3_ROW + i
         activate(
             [
-                Drop(MAIN_H, MAIN_W,       DROP1_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,       DROP2_ROW,   MAIN_COL),
-                Drop(MAIN_H, MAIN_W,       DROP3_ROW,   MAIN_COL),
                 Drop(MAIN_H, piece1_end_w, MEETING_ROW, MEETING_COL),
                 Drop(MAIN_H, piece2_end_w, piece2_row,  MEETING_COL),
                 Drop(MAIN_H, piece3_end_w, piece3_row,  MEETING_COL),
@@ -306,21 +330,11 @@ def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
     print("[Mix] Merging pieces...")
     time.sleep(1)
     activate(
-        [
-            Drop(MAIN_H, MAIN_W,       DROP1_ROW,   MAIN_COL),
-            Drop(MAIN_H, MAIN_W,       DROP2_ROW,   MAIN_COL),
-            Drop(MAIN_H, MAIN_W,       DROP3_ROW,   MAIN_COL),
-            Drop(MAIN_H, piece1_end_w, MEETING_ROW, MEETING_COL),
-        ],
+        [Drop(MAIN_H, piece1_end_w, MEETING_ROW, MEETING_COL)],
         debug_label="MERGE all three pieces"
     )
 
     # Mixing sequence
-    all_mains = [
-        Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
-        Drop(MAIN_H, MAIN_W, DROP2_ROW, MAIN_COL),
-        Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
-    ]
     H, W = MAIN_H, MAIN_W
     r, c = MEETING_ROW, MEETING_COL
 
@@ -328,76 +342,67 @@ def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
     print("\n[Mix] Running mixing sequence...")
 
     print("  Mix pass 1: right 30...")
-    for i in range(1, 31):      activate(all_mains + [Drop(H, W, r, c + i)],       debug_label=f"MIX pass1 right i={i}")
-    for i in range(30, -1, -1): activate(all_mains + [Drop(H, W, r, c + i)],       debug_label=f"MIX pass1 back i={i}")
+    for i in range(1, 31):      activate([Drop(H, W, r, c + i)],       debug_label=f"MIX pass1 right i={i}")
+    for i in range(30, -1, -1): activate([Drop(H, W, r, c + i)],       debug_label=f"MIX pass1 back i={i}")
 
     print("  Mix pass 2: diagonal up-right 20...")
-    for i in range(1, 21):      activate(all_mains + [Drop(H, W, r - i, c + i)],   debug_label=f"MIX pass2 out i={i}")
-    for i in range(20, -1, -1): activate(all_mains + [Drop(H, W, r - i, c + i)],   debug_label=f"MIX pass2 back i={i}")
+    for i in range(1, 21):      activate([Drop(H, W, r - i, c + i)],   debug_label=f"MIX pass2 out i={i}")
+    for i in range(20, -1, -1): activate([Drop(H, W, r - i, c + i)],   debug_label=f"MIX pass2 back i={i}")
 
     print("  Mix pass 3: right-then-down...")
-    for i in range(1, 31):      activate(all_mains + [Drop(H, W, r, c + i)],       debug_label=f"MIX pass3 right i={i}")
-    for i in range(1, 21):      activate(all_mains + [Drop(H, W, r + i, c + 30)],  debug_label=f"MIX pass3 down i={i}")
-    for i in range(20, -1, -1): activate(all_mains + [Drop(H, W, r + i, c + i)],   debug_label=f"MIX pass3 back i={i}")
+    for i in range(1, 31):      activate([Drop(H, W, r, c + i)],       debug_label=f"MIX pass3 right i={i}")
+    for i in range(1, 21):      activate([Drop(H, W, r + i, c + 30)],  debug_label=f"MIX pass3 down i={i}")
+    for i in range(20, -1, -1): activate([Drop(H, W, r + i, c + i)],   debug_label=f"MIX pass3 back i={i}")
 
     print("  Mix pass 4: right 30 double-pass...")
     for _ in range(2):
-        for i in range(1, 31):      activate(all_mains + [Drop(H, W, r, c + i)],   debug_label=f"MIX pass4 right i={i}")
-        for i in range(30, -1, -1): activate(all_mains + [Drop(H, W, r, c + i)],   debug_label=f"MIX pass4 back i={i}")
+        for i in range(1, 31):      activate([Drop(H, W, r, c + i)],   debug_label=f"MIX pass4 right i={i}")
+        for i in range(30, -1, -1): activate([Drop(H, W, r, c + i)],   debug_label=f"MIX pass4 back i={i}")
 
     print("  Mix pass 5: diagonal down-right 15...")
-    for i in range(1, 16):      activate(all_mains + [Drop(H, W, r + i, c + i)],   debug_label=f"MIX pass5 out i={i}")
-    for i in range(15, -1, -1): activate(all_mains + [Drop(H, W, r + i, c + i)],   debug_label=f"MIX pass5 back i={i}")
+    for i in range(1, 16):      activate([Drop(H, W, r + i, c + i)],   debug_label=f"MIX pass5 out i={i}")
+    for i in range(15, -1, -1): activate([Drop(H, W, r + i, c + i)],   debug_label=f"MIX pass5 back i={i}")
 
     print("  Mix pass 6: clockwise rectangle 30x20...")
-    for i in range(1, 31):      activate(all_mains + [Drop(H, W, r,      c + i)],  debug_label=f"MIX pass6 top i={i}")
-    for i in range(1, 21):      activate(all_mains + [Drop(H, W, r + i,  c + 30)], debug_label=f"MIX pass6 right i={i}")
-    for i in range(30, -1, -1): activate(all_mains + [Drop(H, W, r + 20, c + i)],  debug_label=f"MIX pass6 bottom i={i}")
-    for i in range(20, -1, -1): activate(all_mains + [Drop(H, W, r + i,  c)],      debug_label=f"MIX pass6 left i={i}")
+    for i in range(1, 31):      activate([Drop(H, W, r,      c + i)],  debug_label=f"MIX pass6 top i={i}")
+    for i in range(1, 21):      activate([Drop(H, W, r + i,  c + 30)], debug_label=f"MIX pass6 right i={i}")
+    for i in range(30, -1, -1): activate([Drop(H, W, r + 20, c + i)],  debug_label=f"MIX pass6 bottom i={i}")
+    for i in range(20, -1, -1): activate([Drop(H, W, r + i,  c)],      debug_label=f"MIX pass6 left i={i}")
 
     print("  [Mix] Mixing complete.")
 
 
-# ── Per-trial entry point — called by master script each trial ─────────────────
+# ── Per-trial entry point ─────────────────────────────────────────────────────
 
 def main():
     """
     Runs one full mix trial: loads CSV widths, splits all three drops,
     moves pieces to meet, merges, and mixes.
-
     Does NOT open or close the USB connection — initialize() handles that.
-    Safe to call multiple times in a loop.
     """
     piece1_end_w, piece2_end_w, piece3_end_w = load_piece_widths()
 
-    # Drop 1
     split_and_move(
         row=DROP1_ROW,
-        label="Drop 1 (row=65)",
+        label="Drop 1 (row=75)",
         held_items=[],
         piece_end_w=piece1_end_w,
-        start_col=MAIN_COL
     )
 
-    # Drop 2
     split_and_move(
         row=DROP2_ROW,
         label="Drop 2 (row=115)",
         held_items=[(DROP1_ROW, MAIN_COL, piece1_end_w)],
         piece_end_w=piece2_end_w,
-        start_col=MAIN_COL
     )
 
-    # Drop 3
     split_and_move(
         row=DROP3_ROW,
-        label="Drop 3 (row=10)",
+        label="Drop 3 (row=25)",
         held_items=[(DROP1_ROW, MAIN_COL, piece1_end_w), (DROP2_ROW, MAIN_COL, piece2_end_w)],
         piece_end_w=piece3_end_w,
-        start_col=MAIN_COL
     )
 
-    # Move, merge, mix
     move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w)
 
 
