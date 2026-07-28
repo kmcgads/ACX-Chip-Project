@@ -2,14 +2,15 @@
 cleanreload.py
 ─────────────────────────────────────────────────────────────────────────────
 Runs after the colormix experiment (split/merge/mix) is complete.
-The merged drop must be sitting at row=55, col=55 before running this.
+The merged drop must be sitting at row=75, col=55 before running this.
 
-  1. move_to_graveyard  — slides the merged drop right then down into the
-                          graveyard zone anchored at the bottom-right corner
-                          (row=128, col=128). The graveyard grows upward by
-                          DROP_SIZE each trial to hold accumulated liquid.
-  2. reload_reservoirs  — re-activates all three main bodies at 10×15 to
-                          restore them after liquid lost during splitting.
+  1. hold_reservoirs_and_drop — pins all three reservoir bodies and the merged
+                                drop in place simultaneously. Call this before
+                                move_to_graveyard to prevent any drift.
+  2. move_to_graveyard        — slides the merged drop right then down into the
+                                graveyard zone anchored at the bottom-right
+                                corner (row=128, col=128). Grows upward by
+                                DROP_SIZE each trial.
 
 IMPORTANT — Connection management
 ──────────────────────────────────
@@ -21,8 +22,8 @@ connection either — the same open connection is shared across all trials.
 
     import cleanreload
 
+    cleanreload.hold_reservoirs_and_drop()      # pin everything before moving
     cleanreload.move_to_graveyard(trial_number=1)
-    cleanreload.reload_reservoirs()
 
 ────────────────────────────────────────────────────────────────────────────────
 """
@@ -32,7 +33,7 @@ from ctypes import Structure
 import time
 import os
 
-__all__ = ["move_to_graveyard", "reload_reservoirs"]
+__all__ = ["hold_reservoirs_and_drop", "move_to_graveyard"]
 
 # ── DLL singleton — loaded once, never closed ─────────────────────────────────
 
@@ -70,18 +71,18 @@ def activate(drops, debug_label=""):
     time.sleep(0.5)
 
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Constants — must match csvvolcont.py ──────────────────────────────────────
 
 MAIN_H      = 10
 MAIN_W      = 15
 MAIN_COL    = 2
-DROP1_ROW   = 55
-DROP2_ROW   = 105
-DROP3_ROW   = 10
+DROP1_ROW   = 75
+DROP2_ROW   = 115
+DROP3_ROW   = 25
 
-# Merged drop starting position after experiment
-MEETING_ROW = 55    # row where pieces merged (top edge)
-MEETING_COL = 55    # col where pieces merged
+# Merged drop starting position — matches csvvolcont MEETING_ROW / MEETING_COL
+MEETING_ROW = 75    # = DROP1_ROW
+MEETING_COL = 55    # = PIECE_FINAL_COL
 DROP_SIZE   = 20    # merged drop is 20x20
 
 # Graveyard — bottom-right corner fixed at 128,128, grows upward each trial
@@ -93,11 +94,32 @@ GRAVEYARD_BOTTOM = 128
 STEP_DELAY = 0.5
 
 
-# ── Step 1: Move merged drop to graveyard ─────────────────────────────────────
+# ── Step 1: Hold reservoirs and merged drop ───────────────────────────────────
+
+def hold_reservoirs_and_drop() -> None:
+    """
+    Pins all three reservoir bodies and the merged drop in place simultaneously.
+    Call this before move_to_graveyard to prevent any drift.
+    The merged drop is held at (MEETING_ROW, MEETING_COL) and will not move.
+    """
+    print("\n[Hold] Pinning reservoirs and merged drop in place...")
+    activate(
+        [
+            Drop(MAIN_H,    MAIN_W,    DROP1_ROW,   MAIN_COL),
+            Drop(MAIN_H,    MAIN_W,    DROP2_ROW,   MAIN_COL),
+            Drop(MAIN_H,    MAIN_W,    DROP3_ROW,   MAIN_COL),
+            Drop(DROP_SIZE, DROP_SIZE, MEETING_ROW, MEETING_COL),
+        ],
+        debug_label="HOLD reservoirs + merged drop"
+    )
+    print("  All three reservoirs and merged drop held in place.")
+
+
+# ── Step 2: Move merged drop to graveyard ─────────────────────────────────────
 
 def move_to_graveyard(trial_number: int) -> None:
     """
-    Moves the 20x20 merged drop from (row=55, col=55) into the graveyard zone
+    Moves the 20x20 merged drop from (row=75, col=55) into the graveyard zone
     at the bottom-right corner (anchored at row=128, col=128).
 
     The graveyard grows upward by DROP_SIZE each trial:
@@ -147,7 +169,7 @@ def move_to_graveyard(trial_number: int) -> None:
 
     time.sleep(STEP_DELAY)
 
-    # ── Phase 2: Slide drop DOWN — row 55 → graveyard top ────────────────────
+    # ── Phase 2: Slide drop DOWN — row 75 → graveyard top ────────────────────
     print(f"\n[Graveyard Phase 2] Moving drop down: row {MEETING_ROW} → {drop_landing_row}...")
 
     for row in range(MEETING_ROW + 1, drop_landing_row + 1):
@@ -171,51 +193,17 @@ def move_to_graveyard(trial_number: int) -> None:
     time.sleep(STEP_DELAY)
 
 
-# ── Step 2: Reload reservoirs to 10×15 ────────────────────────────────────────
-
-def reload_reservoirs():
-    """
-    Re-activates each main body at 10×15 one at a time, then holds all three.
-    The reservoir well is co-located with the main drop (same row, col=2) —
-    activating the electrode draws fresh fluid back to full 10×15.
-
-    The device connection is NOT closed after reloading.
-    """
-    print("\n[Reload] Reloading reservoirs to 10×15...")
-    time.sleep(1)
-
-    for label, row in [("Drop 1", DROP1_ROW), ("Drop 2", DROP2_ROW), ("Drop 3", DROP3_ROW)]:
-        activate(
-            [Drop(MAIN_H, MAIN_W, row, MAIN_COL)],
-            debug_label=f"RELOAD {label} row={row}"
-        )
-        print(f"  {label} (row={row}): restored to {MAIN_H}×{MAIN_W}")
-        time.sleep(0.5)
-
-    activate(
-        [
-            Drop(MAIN_H, MAIN_W, DROP1_ROW, MAIN_COL),
-            Drop(MAIN_H, MAIN_W, DROP2_ROW, MAIN_COL),
-            Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
-        ],
-        debug_label="HOLD ALL 3 at 10×15"
-    )
-    print("  All three reservoirs restored to 10×15.")
-    time.sleep(STEP_DELAY)
-
-
 # ── Main (manual use only) ────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
+    hold_reservoirs_and_drop()
     try:
         trial = int(input("Enter trial number (1, 2, 3 ...): ").strip())
     except ValueError:
         print("Invalid trial number.")
         return
-
     move_to_graveyard(trial_number=trial)
-    reload_reservoirs()
-    print("\n=== Done: drop in graveyard, reservoirs at 10×15 ===")
+    print("\n=== Done: drop in graveyard ===")
 
 
 if __name__ == "__main__":
