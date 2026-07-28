@@ -116,7 +116,7 @@ def main() -> None:
         # Step 3: Capture color
         wait("Step 3 — capture mixed color with camera")
         measured_hex = capture_color(cam)
-
+  
         # Step 4: Score result
         wait(f"Step 4 — score {measured_hex} against target {target.hex}")
         converged = opt.tell(measured_hex)
@@ -139,7 +139,7 @@ def main() -> None:
         wait("Step 5 — move drop to graveyard and reload reservoirs")
         print("  [Chip] Moving to graveyard and reloading...")
         cleanreload.move_to_graveyard(trial_number=n)
-        cleanreload.reload_reservoirs()
+        #cleanreload.reload_reservoirs()
 
         if trial < opt.n_calls - 1:
             wait(f"Trial {n} done — ready for Trial {n + 1}")
