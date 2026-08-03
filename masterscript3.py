@@ -8,8 +8,18 @@ Each trial:
   2. csvvolcont mixes the drop on chip
   3. Camera measures the resulting color
   4. Bayesian scores it (DeltaE vs target) and updates its model
-  5. Drop moved to graveyard, reservoirs reloaded
+  5. Drop held, transferred to the graveyard (upper-right corner), then the
+     graveyard is shrunk in from 30x30 down to 1x1
   Repeats up to N_CALLS times, stops early if DeltaE < 2.0.
+
+NOTE — graveyard behavior
+─────────────────────────
+csvvolcont no longer holds an always-on graveyard zone. The graveyard exists
+only while cleanreload is running it, in two separate commands:
+    cleanreload.move_to_graveyard(trial_number=n)   # transfer: right, then up
+    cleanreload.shrink_graveyard()                  # 30x30 → 1x1, Enter per step
+shrink_graveyard() prompts for Enter on every one of its 29 steps by default;
+pass interactive=False to run it unattended.
 
 Usage: python run_experiment.py
 """
@@ -32,6 +42,10 @@ from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 CAMERA_INDEX   = 1      # Change if microscope is on a different index
 RANDOM_SEED    = None   # None = new random target color each run
 N_CALLS        = 5      # Max number of trials
+
+# Graveyard shrink: True = press Enter for each of the 29 shrink steps,
+# False = run all steps back-to-back on cleanreload.STEP_DELAY
+SHRINK_INTERACTIVE = True
 
 # Must match the path csvvolcont.load_piece_widths() reads from
 COLOR_MIX_XLSX = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
@@ -69,6 +83,24 @@ def write_widths_to_xlsx(w1: int, w2: int, w3: int, path: str = COLOR_MIX_XLSX) 
     ws.cell(row=2, column=3).value = w3
     wb.save(path)
     print(f"  [XLSX] Widths written → piece_1={w1}, piece_2={w2}, piece_3={w3}")
+
+
+def clear_drop_to_graveyard(trial_number: int) -> None:
+    """
+    Full end-of-trial cleanup, in the order cleanreload expects:
+      1. hold_reservoirs_and_drop() — pin everything so nothing drifts
+      2. move_to_graveyard()        — transfer only (right, then up to row 1)
+      3. shrink_graveyard()         — 30x30 pad → 1x1, separate command
+    """
+    print("  [Chip] Pinning reservoirs and merged drop...")
+    cleanreload.hold_reservoirs_and_drop()
+
+    print("  [Chip] Transferring drop to the graveyard (upper-right corner)...")
+    cleanreload.move_to_graveyard(trial_number=trial_number)
+
+    wait("Drop parked in the corner — ready to SHRINK the graveyard in")
+    print("  [Chip] Shrinking graveyard 30x30 → 1x1...")
+    cleanreload.shrink_graveyard(interactive=SHRINK_INTERACTIVE)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -116,7 +148,7 @@ def main() -> None:
         # Step 3: Capture color
         wait("Step 3 — capture mixed color with camera")
         measured_hex = capture_color(cam)
-  
+
         # Step 4: Score result
         wait(f"Step 4 — score {measured_hex} against target {target.hex}")
         converged = opt.tell(measured_hex)
@@ -133,13 +165,14 @@ def main() -> None:
 
         if converged:
             print(f"\n  [CONVERGED] DeltaE < 2.0 — match found after {n} trial(s)!")
-            break
 
-        # Step 5: Graveyard + reload
-        wait("Step 5 — move drop to graveyard and reload reservoirs")
-        print("  [Chip] Moving to graveyard and reloading...")
-        cleanreload.move_to_graveyard(trial_number=n)
-        #cleanreload.reload_reservoirs()
+        # Step 5: Graveyard transfer + shrink — runs even on the final trial so
+        # the chip is never left with a drop parked at the meeting point.
+        wait("Step 5 — move drop to graveyard")
+        clear_drop_to_graveyard(trial_number=n)
+
+        if converged:
+            break
 
         if trial < opt.n_calls - 1:
             wait(f"Trial {n} done — ready for Trial {n + 1}")
