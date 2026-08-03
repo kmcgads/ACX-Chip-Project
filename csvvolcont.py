@@ -25,8 +25,14 @@ open or close the USB connection.
 
 IMPORTANT — Always-on electrodes
 ──────────────────────────────────
-RESERVOIRS and GRAVEYARD are included in every activate() call automatically.
-Do not manually add them to activate calls — they are prepended via BASE_DROPS.
+RESERVOIRS are included in every activate() call automatically. Do not manually
+add them to activate calls — they are prepended via BASE_DROPS.
+
+NOTE — No graveyard here
+──────────────────────────────────
+There is NO always-on graveyard zone in this script. The graveyard is created
+on demand by cleanreload.py (30x30 pad in the upper-right corner, then shrunk
+in), so nothing is held there during the mix sequence.
 ────────────────────────────────────────────────────────────────────────────────
 """
 
@@ -79,15 +85,9 @@ RESERVOIRS = [
     Drop(MAIN_H, MAIN_W, DROP3_ROW, MAIN_COL),
 ]
 
-# Graveyard: fixed 30x30 zone in the bottom-right corner of the chip
-GRAVEYARD_H   = 30
-GRAVEYARD_W   = 30
-GRAVEYARD_ROW = 128 - GRAVEYARD_H + 1   # = 99
-GRAVEYARD_COL = 128 - GRAVEYARD_W + 1   # = 99
-GRAVEYARD     = Drop(GRAVEYARD_H, GRAVEYARD_W, GRAVEYARD_ROW, GRAVEYARD_COL)
-
-# Prepended to every activate() call — never modify this directly
-BASE_DROPS = RESERVOIRS + [GRAVEYARD]
+# Prepended to every activate() call — never modify this directly.
+# Reservoirs only — no graveyard zone is held by this script.
+BASE_DROPS = list(RESERVOIRS)
 
 
 # ── CSV loader ────────────────────────────────────────────────────────────────
@@ -112,12 +112,12 @@ def load_piece_widths(filepath=CSV_PATH):
     return piece1_end_w, piece2_end_w, piece3_end_w
 
 
-# ── Core activate — always includes RESERVOIRS + GRAVEYARD ───────────────────
+# ── Core activate — always includes RESERVOIRS ───────────────────────────────
 
 def activate(drops, debug_label=""):
     """
-    Send an electrode activation command. RESERVOIRS and GRAVEYARD are
-    automatically prepended — do not add them manually to calls.
+    Send an electrode activation command. RESERVOIRS are automatically
+    prepended — do not add them manually to calls.
     """
     all_drops = list(BASE_DROPS) + list(drops)
     n         = len(all_drops)
@@ -206,7 +206,7 @@ def held_pieces(held_items):
 def split_and_move(row, label, held_items, piece_end_w, start_col=None):
     """
     Loads, stretches, splits, and moves a drop's piece to PIECE_FINAL_COL.
-    Reservoirs and graveyard are held automatically via activate().
+    Reservoirs are held automatically via activate().
     """
     if start_col is None:
         start_col = MAIN_COL
@@ -306,7 +306,7 @@ def move_pieces_to_meet(piece1_end_w, piece2_end_w, piece3_end_w):
     """
     Moves all three pieces simultaneously toward MEETING_ROW, MEETING_COL,
     merges them, then runs the full mixing sequence.
-    Reservoirs and graveyard held automatically via activate().
+    Reservoirs held automatically via activate().
     """
     steps_to_meet = DROP2_ROW - MEETING_ROW   # 40 steps
 
