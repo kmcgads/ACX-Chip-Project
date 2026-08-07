@@ -489,7 +489,7 @@ def main() -> OptimizationResult:
     and feeds the measured hex automatically to the Bayesian optimizer.
     Set CAMERA_INDEX to whichever index your microscope is on.
     """
-    from researchos.camera import CameraInterface
+    from camera import CameraInterface
 
     CAMERA_INDEX = 1   # change if microscope is on a different index
 

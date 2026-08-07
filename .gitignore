@@ -3,4 +3,14 @@ __pycache__/
 .venv/
 venv/
 
+# Chip-health run output. Each run writes continuous video plus stills, so this
+# grows by tens of megabytes per run and must not enter the repo. The artifacts
+# are the experimental record -- back them up, just not here.
+runs/
+
+# Per-run camera registration cache (the four chip corners). Machine-local and
+# rewritten every run; committing it would hand the next clone a stale
+# calibration for a camera that has since moved.
+calibration.json
+
 

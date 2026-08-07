@@ -1062,8 +1062,36 @@ def _image_writer():
     return lambda path, frame: cv2.imwrite(path, frame)
 
 
+def _find_camera_dir() -> Path:
+    """Locate the directory holding the researcher's camera.py.
+
+    It has moved once already (repo root -> colormixing/), which broke the
+    import silently for every --camera run while leaving --simulate and the
+    whole test suite green. So this checks the known places, then searches one
+    level down, and refuses to guess when it finds more than one candidate --
+    picking wrong would mean silently running against a stale copy.
+    """
+    root = Path(__file__).resolve().parent.parent
+    for candidate in (root / "colormixing", root):
+        if (candidate / "camera.py").is_file():
+            return candidate
+
+    found = sorted({p.parent for p in root.glob("*/camera.py")})
+    if len(found) == 1:
+        return found[0]
+    if len(found) > 1:
+        raise ImportError(
+            f"Found camera.py in more than one place: {[str(p) for p in found]}. "
+            f"Cannot tell which is the maintained copy; remove the duplicates.")
+    raise ImportError(
+        f"Could not find camera.py under {root}. Expected it at "
+        f"colormixing/camera.py or the repository root.")
+
+
 def _camera_source(cfg: RunConfig):
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+    camera_dir = _find_camera_dir()
+    sys.path.insert(0, str(camera_dir))
+    log.info("Using camera module from %s", camera_dir)
     from camera import CameraInterface  # the researcher's own camera module
 
     cam = CameraInterface(camera_address=cfg.capture.camera_address)
