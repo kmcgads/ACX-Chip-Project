@@ -28,7 +28,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from camera import CameraInterface
+from researchos.camera import CameraInterface
 from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 
 # ── Config ────────────────────────────────────────────────────────────────────

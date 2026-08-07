@@ -34,7 +34,7 @@ if SCRIPT_DIR not in sys.path:
 
 import csvvolcont
 import cleanreload
-from camera import CameraInterface
+from researchos.camera import CameraInterface
 from bayesopttest1 import BlindOptimizer, random_vivid_target_color
 
 # ── Config ────────────────────────────────────────────────────────────────────

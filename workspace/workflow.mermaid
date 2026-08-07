@@ -1,0 +1,10 @@
+graph TD
+    classDef active fill:#fff3cd,stroke:#856404,color:#333
+    classDef completed fill:#d4edda,stroke:#28a745,color:#155724
+    classDef dead_end fill:#f8d7da,stroke:#dc3545,color:#721c24,stroke-dasharray: 5 5
+    classDef planned fill:#e2e3e5,stroke:#6c757d,color:#333
+    classDef source fill:#e7f1ff,stroke:#0d6efd,color:#084298
+    classDef software fill:#f0e7ff,stroke:#6f42c1,color:#3d1a78
+    subgraph software_component["Software"]
+        sw_project["project<br/><i>repo</i>"]:::software
+    end

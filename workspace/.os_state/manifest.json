@@ -1,0 +1,25 @@
+{
+  "schema_version": "2.0",
+  "project": {
+    "title": "Acxchip"
+  },
+  "created_at": "2026-08-03T19:10:21.897520+00:00",
+  "top_level_directories": [
+    ".os_state",
+    "docs",
+    "inputs",
+    "inputs/raw_data",
+    "inputs/literature",
+    "inputs/context",
+    "spec",
+    "decisions",
+    "eval",
+    "workspace",
+    "workspace/logs",
+    "workspace/scratch",
+    "environment"
+  ],
+  "active_path": "main",
+  "paths": {},
+  "updated_at": "2026-08-05T16:59:10.162943+00:00"
+}

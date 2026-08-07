@@ -19,6 +19,7 @@ piece one column at a time.
 
 from __future__ import annotations
 
+
 from dataclasses import dataclass, asdict
 
 # Which coordinate a step advances.
