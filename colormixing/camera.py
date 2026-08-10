@@ -37,18 +37,29 @@ class CameraInterface:
         except (ValueError, TypeError):
             return camera_address
 
-    def _open_camera(self, autofocus: bool = True) -> cv2.VideoCapture:
+    def _open_camera(self, autofocus: bool = True,
+                     resolution: tuple[int, int] | None = None) -> cv2.VideoCapture:
         """Open the device.
 
-        ``autofocus`` defaults to True so existing callers behave exactly as
-        before. Measurement runs pass False: refocusing mid-run is a real
-        variance source, and the researcher sets focus by hand
+        ``autofocus`` defaults to True and ``resolution`` to None so existing
+        callers behave exactly as before. Measurement runs pass False for
+        autofocus: refocusing mid-run is a real variance source
         (spec/objectives.md §1.4).
+
+        ``resolution`` requests a capture size. Left unset, the driver default
+        applies -- which for this c922 is 640x480, and at that size the chip
+        spanned only ~1.7 pixels per electrode in the 2026-08-10 dry run, well
+        below what the detector's electrode-unit thresholds assume. The device
+        silently falls back to a supported mode if it cannot honour the
+        request, so the delivered size is always measured rather than assumed.
         """
         camera = cv2.VideoCapture(self.camera_address, cv2.CAP_DSHOW)
         # cv2.VideoWriter_fourcc exists at runtime; the opencv-python stubs do
         # not declare it, so Pylance reports a false attribute error here.
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # type: ignore[attr-defined]
+        if resolution is not None:
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, int(resolution[0]))
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, int(resolution[1]))
         camera.set(cv2.CAP_PROP_AUTOFOCUS, 1 if autofocus else 0)
         if not camera.isOpened():
             raise Exception("Unable to connect to camera")
@@ -60,7 +71,8 @@ class CameraInterface:
 
     # ── streaming ─────────────────────────────────────────────────────────────
 
-    def open_stream(self, autofocus: bool = False) -> "CameraInterface":
+    def open_stream(self, autofocus: bool = False,
+                    resolution: tuple[int, int] | None = None) -> "CameraInterface":
         """Hold the device open across frames.
 
         A visualization loop cannot pay a device-open per frame, which is what
@@ -68,7 +80,8 @@ class CameraInterface:
         camera, same CAP_DSHOW/MJPG connection (spec/objectives.md §0.2).
         """
         if self._stream is None:
-            self._stream = self._open_camera(autofocus=autofocus)
+            self._stream = self._open_camera(autofocus=autofocus,
+                                             resolution=resolution)
             self._frame_index = 0
         return self
 
@@ -325,15 +338,6 @@ class CameraInterface:
             )
         return self._frame
 
-    def min_area_px_for(self, min_electrodes: float = 1.0) -> float:
-        """Pixel-area threshold for a blob of a given size in electrodes.
-
-        Replaces the fixed ``min_area=500`` used by detect_drop_color. At
-        whole-chip framing one electrode is on the order of 100 px^2, so 500
-        would silently discard several electrodes of residue.
-        """
-        return self._require_registration().min_area_px(min_electrodes)
-
     def liquid_mask(self, frame: np.ndarray, min_saturation: int = 30,
                     kernel_px: int = 3) -> np.ndarray:
         """Binary mask of coloured liquid.
@@ -390,6 +394,12 @@ class CameraInterface:
             h = float(stats[i, cv2.CC_STAT_HEIGHT])
             cx, cy = float(centroids[i][0]), float(centroids[i][1])
             row, col = ef.pixel_to_electrode(cx, cy)
+            # Only what is on the chip. The frame is mostly not the chip -- in
+            # the 2026-08-10 dry run the array filled 13% of a 640x480 frame and
+            # 94% of detections were background scored as liquid, including one
+            # "blob" of 45,578 electrodes against a 16,384-electrode chip.
+            if not ef.contains(row, col):
+                continue
             e_row, e_col, e_h, e_w = ef.bbox_px_to_electrode(x, y, w, h)
             out.append({
                 "area_px": area_px,
@@ -429,7 +439,7 @@ if __name__ == "__main__":
     print("Starting camera script...")
 
     try:
-        camera = CameraInterface(camera_address=1)
+        camera = CameraInterface(camera_address= 0)
 
         frame_w, frame_h = camera.get_frame_size()
 
