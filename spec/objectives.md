@@ -156,9 +156,9 @@ the electrical-feedback follow-up this raised.
 per-electrode. On a 128×128 chip that is a 32×32 grid = **1,024 blocks**.
 
 **Chip geometry.** ✅ Confirmed 128×128, matching `ActivateElec(128, 128, ...)` at
-`chipsetup.py:70`. **Electrode pitch is not yet known** — the researcher will supply it at
-Priority 3. Explicitly *not* blocking P1. ⏰ **I owe a reminder at the start of Priority 3**
-(agreed 2026-08-06); see §3.1.
+`chipsetup.py:70`. **Electrode pitch ✅ RESOLVED 2026-08-10: 246.48 µm** — measured active grid
+31.55 mm square (995.4025 mm²) ÷ 128. Cell footprint 0.0608 mm² (60,752 µm²). Wired into
+`ChipConfig.pitch_um`; conversions in `geometry.electrodes_to_um` and friends.
 
 **Voltage.** **45 V**, matching `SetVolt(45,45,45,0,0,0,0,0,0)` at `chipsetup.py:47`. Lower
 voltages do not actuate reliably, so a lower setting would manufacture false dead electrodes.
@@ -196,7 +196,8 @@ testing on the Windows instrument PC.
 | Voltage | 45 V (degradation baseline) | researcher |
 | Inter-activation delay | 0.5 s, adjustable | researcher |
 | Run length | user-driven, never preset | researcher |
-| Electrode pitch | ⏰ deferred to Priority 3 | researcher |
+| Electrode pitch | ✅ 246.48 µm (31.55 mm ÷ 128), resolved 2026-08-10 | researcher |
+| Plate gap | ⏰ still unknown — blocks droplet *volumes*, not sizes | researcher |
 | Filler / sample | silicon oil + dyed water (sample will change) | researcher |
 | Loading | manual, mid-run top-up supported via prompt | researcher |
 | Arming | dry-run default, easy explicit disarm | researcher |
@@ -410,11 +411,41 @@ tell a genuinely smaller droplet from a differently-lit one. The px → electrod
 the detection path built in Priority 1 are what make Priority 3 falsifiable. This is the main
 reason the ordering you chose works.
 
-> ⏰ **REMINDER OWED AT THE START OF PRIORITY 3.** The **electrode pitch (µm)** is still unknown.
-> The researcher deferred it here deliberately (§1.4) and asked to be reminded rather than
-> blocked. Without it, droplet size has no physical units — only "electrodes across", which is
-> enough for relative comparison but not for reporting an actual volume or dimension. Ask before
-> designing P3.
+> ✅ **ELECTRODE PITCH RESOLVED 2026-08-10 — 246.48 µm.** The reminder owed here has been
+> delivered and answered. Measured active grid 31.55 mm square (995.4025 mm²) over 128 × 128
+> electrodes, so pitch = 31.55 / 128 = **246.48 µm** and one cell covers **0.0608 mm²**
+> (60,752 µm²). Verified self-consistent: 246.48 × 128 = 31.549 mm, and 16,384 cells = 995.37 mm²
+> against the measured 995.4025 mm².
+>
+> What this now makes reportable, in real units:
+>
+> | Droplet | Physical size |
+> |---|---|
+> | 1×1 (the target) | 0.246 × 0.246 mm |
+> | 4×4 (a coverage block) | 0.986 × 0.986 mm |
+> | 5×3 (`1pixsplit.py`'s best) | 1.232 × 0.739 mm |
+> | 5×5 (the P1 fine-pass probe) | 1.232 × 1.232 mm |
+> | 20×20 (the loaded droplet) | 4.930 × 4.930 mm |
+>
+> A full coarse sweep therefore drags the droplet **222 mm** over its 901 steps.
+>
+> ⏰ **Still open: the plate gap (µm). NO VALUE HAS BEEN SUPPLIED OR ADOPTED.** Footprint follows
+> from the pitch; **volume does not** — a droplet is a slab and without its thickness any figure
+> would be invented. `ChipConfig.gap_um` is `None`, `droplet_volume_nl()` returns `None`, and a
+> test enforces both; callers must handle that rather than substitute a guess.
+>
+> The figures below are **hypothetical illustrations of scale only** — none is a measurement of
+> this instrument, and none is used by any code:
+>
+> | Hypothetical gap | 1×1 droplet would be |
+> |---|---|
+> | 50 µm | 3.0 nL |
+> | 100 µm | 6.1 nL |
+> | 250 µm | 15.2 nL |
+> | 500 µm | 30.4 nL |
+>
+> The researcher noted 2026-08-10 that no confident measurement exists yet. Do not wire any of
+> these in.
 
 ### 3.2 Starting point in the existing code
 
