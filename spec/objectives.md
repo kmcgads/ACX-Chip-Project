@@ -194,7 +194,7 @@ testing on the Windows instrument PC.
 | Grid | 128 × 128 electrodes | confirmed |
 | Block size | 4 × 4 electrodes → 32 × 32 = 1,024 blocks | researcher |
 | Voltage | 45 V (degradation baseline) | researcher |
-| Inter-activation delay | 0.5 s, adjustable | researcher |
+| Inter-activation delay | **0.5 s** — matches `1pixsplit.py` `activate()` and `cleanup.py` `STEP_DELAY`, the working scripts | legacy code |
 | Run length | user-driven, never preset | researcher |
 | Electrode pitch | ✅ 246.48 µm (31.55 mm ÷ 128), resolved 2026-08-10 | researcher |
 | Plate gap | ⏰ still unknown — blocks droplet *volumes*, not sizes | researcher |
