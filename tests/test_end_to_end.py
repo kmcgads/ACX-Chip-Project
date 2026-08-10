@@ -107,7 +107,9 @@ class TestHealthyChip(unittest.TestCase):
         self.assertIn("rows: [1]", text)
 
     def test_still_cadence_is_five_seconds(self):
-        span = len(self.steps) * 0.5
+        # Derived from the configured delay, not a literal -- the step delay
+        # moved 0.5 -> 1.0 on 2026-08-10 and a hardcoded 0.5 broke here.
+        span = len(self.steps) * self.cfg.sweep.step_delay_s
         self.assertAlmostEqual(self.rec.n_routine_stills, span / 5.0, delta=2)
 
 

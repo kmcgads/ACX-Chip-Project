@@ -222,11 +222,17 @@ class TestRegistrationGuard(unittest.TestCase):
         try:
             self.assertTrue(stats["aborted"])
             self.assertEqual(stats["steps"], 0)
-            # The one ActivateElec on this path is the shutdown clear, with an
-            # empty drop list -- de-energising, not energising.
+            # Two activations now: the phase-1 holding frame, then the
+            # shutdown clear. Energising before registration is verified is
+            # unavoidable on this hardware -- a droplet cannot be held at a
+            # known position without voltage, and registration cannot be
+            # verified without a held droplet. What matters is that the abort
+            # still de-energises: the LAST activation is the empty clear and
+            # the supply is off.
             activations = [payload for name, payload in be.calls
                            if name == "ActivateElec"]
-            self.assertEqual(activations, [[]])
+            self.assertEqual(activations, [[(20, 20, 2, 5)], []])
+            self.assertEqual(activations[-1], [])
             self.assertEqual(be.frame, [])
             self.assertFalse(be.powered)
         finally:
