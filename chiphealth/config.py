@@ -69,6 +69,16 @@ class ChipConfig:
     # slop is normal, a rail reading 0 when 45 was commanded is not.
     volt_tolerance: int = 2
 
+    # Seconds to wait after SetVolt before reading the rails back. The legacy
+    # scripts had an input() prompt between the two, so a human supplied this
+    # delay without anyone noticing it mattered.
+    volt_settle_s: float = 3.0
+
+    # Seconds between SetPower and SetVolt. chipsetup.py has an input() prompt
+    # here; the legacy scripts reach 45V and this binding did not, and issuing
+    # the two calls back to back was the remaining structural difference.
+    power_settle_s: float = 2.0
+
     def __post_init__(self) -> None:
         if len(self.volts) != 9:
             raise ValueError(f"SetVolt takes exactly 9 rails, got {len(self.volts)}")
@@ -90,7 +100,16 @@ class SweepConfig:
     # one-column-at-a-time discipline in 1pixsplit.py and dropsplitoff.py.
     step_electrodes: int = 1
 
-    # Seconds between activations. cleanup.py:61 uses the same 0.5s default.
+    # Seconds between activations. 0.5 matches the working scripts exactly:
+    # 1pixsplit.py's activate() sleeps 0.5s and move_drop() calls it once per
+    # one-electrode step, and cleanup.py/cleanreload.py both use
+    # STEP_DELAY = 0.5. Their 1s and 2s sleeps are STAGE boundaries -- after a
+    # load, after a split, before shutdown -- not per-step delays.
+    #
+    # Note this is a sleep AFTER each activation, not the period. Frame
+    # capture, detection and artifact writing add ~150-180ms per step at 1080p,
+    # so our real interval is ~0.67s where the legacy scripts sit at ~0.5s.
+    # Override with --step-delay, which takes precedence.
     step_delay_s: float = 0.5
 
     # "h" (horizontal serpentine only) or "both" (adds a vertical pass).

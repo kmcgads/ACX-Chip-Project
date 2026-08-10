@@ -151,11 +151,19 @@ class RealBackend:
         return missing
 
     def _pin_signatures(self) -> None:
-        self.lib.SetPower.argtypes = [ctypes.c_bool]
-        self.lib.SetVolt.argtypes = [ctypes.c_int] * N_RAILS
-        self.lib.InquireVolt.argtypes = [ctypes.POINTER(ctypes.c_int)] * N_RAILS
-        self.lib.ActivateElec.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                                          ctypes.POINTER(Drop)]
+        """Set return types only. Deliberately NO argtypes.
+
+        The legacy scripts (chipsetup.py, cleanup.py, 1pixsplit.py) declare no
+        argtypes at all and demonstrably work against this DLL. Analysis §2
+        established that its real ABI diverges from the vendor documentation,
+        so the working scripts are the only reliable specification -- and
+        pinning types they never pinned changes how ctypes marshals every call
+        for no benefit. An earlier version pinned SetPower as c_bool, sending
+        one byte where the working code sends four.
+
+        Default marshalling: Python int -> C int, byref(c_int) -> int*, and a
+        ctypes array -> pointer. Exactly what the legacy calls produce.
+        """
         for name in REQUIRED_EXPORTS:
             getattr(self.lib, name).restype = ctypes.c_int
 
@@ -169,17 +177,27 @@ class RealBackend:
         return int(self.lib.CloseUSB())
 
     def set_power(self, on: bool) -> int:
-        return int(self.lib.SetPower(bool(on)))
+        return int(self.lib.SetPower(1 if on else 0))
 
     def set_volt(self, volts: Sequence[int]) -> int:
         if len(volts) != N_RAILS:
             raise ValueError(f"SetVolt takes {N_RAILS} rails, got {len(volts)}")
         return int(self.lib.SetVolt(*[int(v) for v in volts]))
 
+    # Out-params are pre-filled with this so an untouched parameter is
+    # distinguishable from a rail that genuinely reads zero. The legacy script
+    # happens to pre-fill 1..9, which serves the same purpose by accident.
+    UNWRITTEN = -31337
+
     def inquire_volt(self) -> tuple[int, list[int]]:
-        cells = [ctypes.c_int(0) for _ in range(N_RAILS)]
+        cells = [ctypes.c_int(self.UNWRITTEN) for _ in range(N_RAILS)]
         rc = int(self.lib.InquireVolt(*[ctypes.byref(c) for c in cells]))
-        return rc, [c.value for c in cells]
+        raw = [c.value for c in cells]
+        untouched = [i + 1 for i, v in enumerate(raw) if v == self.UNWRITTEN]
+        if untouched:
+            log.warning("InquireVolt did not write rails %s -- those readings "
+                        "are absent, not zero.", untouched)
+        return rc, [0 if v == self.UNWRITTEN else v for v in raw]
 
     def activate_elec(self, rows: int, cols: int, drops: Sequence[Drop]) -> int:
         n = len(drops)
@@ -281,7 +299,8 @@ class ChipController:
     def __init__(self, backend: Backend, rows: int, cols: int,
                  volts: Sequence[int], armed: bool = False,
                  step_delay_s: float = 0.5, sleep=time.sleep,
-                 volt_tolerance: int = 2) -> None:
+                 volt_tolerance: int = 2, volt_settle_s: float = 3.0,
+                 power_settle_s: float = 2.0) -> None:
         self.backend = backend
         self.rows = rows
         self.cols = cols
@@ -290,6 +309,8 @@ class ChipController:
         self.step_delay_s = float(step_delay_s)
         self._sleep = sleep
         self.volt_tolerance = int(volt_tolerance)
+        self.volt_settle_s = float(volt_settle_s)
+        self.power_settle_s = float(power_settle_s)
 
         self.frames_sent = 0
         self.frames_suppressed = 0
@@ -317,12 +338,49 @@ class ChipController:
             raise ChipError("OpenUSB failed -- is the device connected?")
         self._open = True
         if self.armed:
-            self.backend.set_power(True)
-            self.backend.set_volt(self.volts)
+            # Return codes were previously discarded, so a refused SetPower
+            # looked identical to a successful one.
+            rc_power = self.backend.set_power(True)
+            log.info("SetPower(True) -> rc=%s", rc_power)
+            # Wait BEFORE SetVolt, not only after. chipsetup.py has an input()
+            # here, so a human gave the supply seconds to come up before any
+            # voltage was commanded. Issuing the two back to back lands SetVolt
+            # mid-initialisation, which is what partial rails (16V, 15V, 0V
+            # against a commanded 45V) look like.
+            if self.power_settle_s > 0:
+                log.info("  waiting %.1fs for the supply to come up", self.power_settle_s)
+                self._sleep(self.power_settle_s)
+            rc_volt = self.backend.set_volt(self.volts)
+            log.info("SetVolt%s -> rc=%s", tuple(self.volts), rc_volt)
+            # The supply needs a moment. The legacy scripts had an input()
+            # prompt between each of these calls, so a human was unknowingly
+            # providing seconds of settling time; issuing them back to back can
+            # read the rails before they have ramped.
+            self._settle_and_log()
         else:
             log.info("DRY-RUN: skipping SetPower(True) and SetVolt%s", tuple(self.volts))
         rc, rails = self.backend.inquire_volt()
         log.info("InquireVolt rc=%s rails=%s (global rails, NOT per-electrode)", rc, rails)
+
+    def _settle_and_log(self) -> None:
+        """Poll the rails while they settle, logging each reading.
+
+        A single delayed read cannot tell a supply still ramping from one that
+        has stopped short. Polling shows which: rising values mean wait longer,
+        flat ones mean the rails are simply not reaching the commanded voltage.
+        """
+        deadline_polls = max(1, int(self.volt_settle_s / 0.25)) if self.volt_settle_s else 1
+        previous = None
+        for i in range(deadline_polls):
+            self._sleep(0.25)
+            rc, rails = self.backend.inquire_volt()
+            log.info("  settle poll %d/%d: rc=%s rails=%s", i + 1, deadline_polls,
+                     rc, rails)
+            if rails == previous and i > 0:
+                log.info("  rails stable after %.2fs", (i + 1) * 0.25)
+                return
+            previous = rails
+        log.info("  settle window ended after %.2fs", deadline_polls * 0.25)
 
     def verify_voltage(self) -> VoltageCheck:
         """Read the rails back and compare them to what was commanded.

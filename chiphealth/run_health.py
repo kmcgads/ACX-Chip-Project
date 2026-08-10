@@ -430,12 +430,34 @@ class HealthRun:
         """
         s = self.cfg.sweep
         log.info("PHASE 1  operator load")
+
+        # Energise the target region BEFORE asking for liquid. Holding a
+        # droplet at a position needs active voltage on this hardware, so a
+        # prompt with nothing energised asks the operator to place liquid into
+        # a region that cannot hold it. Every legacy script does it this way --
+        # 1pixsplit.py activates the drop rectangle and only then prompts
+        # "Drop loaded"; chipsetup.py calls ActivateElec then waits.
+        #
+        # The frame persists until the next ActivateElec, so this holds through
+        # registration and baseline, and the sweep's first step continues from
+        # it (window moves (2,5) -> (1,5), one electrode).
+        if self.chip.armed:
+            hold = Drop(s.window_h, s.window_w, s.start_row, s.start_col)
+            self.chip.activate([hold], settle=False)
+            log.info("Holding %dx%d at row %d, col %d -- load into the "
+                     "energised region.", s.window_h, s.window_w,
+                     s.start_row, s.start_col)
+        else:
+            log.info("DRY-RUN: no holding frame energised, so liquid will not "
+                     "stay. Expected for a dry run.")
+
         instruction = (
             f"LOAD THE SUBSTANCE:\n"
             f"  1. Silicon oil filler.\n"
             f"  2. Test substance on top.\n"
             f"  3. Form a {s.window_h}x{s.window_w} droplet at "
-            f"row {s.start_row}, col {s.start_col} (top-left region).")
+            f"row {s.start_row}, col {s.start_col} (top-left region).\n"
+            f"     That region is energised and holding -- load into it.")
         for attempt in range(1, attempts + 1):
             self.ask.ask(instruction, self.now())
             if self.ask.confirm(
@@ -668,7 +690,13 @@ class HealthRun:
         return False
 
     def phase3_baseline(self) -> None:
-        """Frames with nothing energised: the reference residue is differenced against."""
+        """Reference frames the residue check is differenced against.
+
+        The holding frame from phase 1 is still applied, so this captures the
+        chip with the droplet at rest -- which is what residue detection needs
+        to compare against, and the only state in which a droplet exists at a
+        known position on this hardware.
+        """
         log.info("PHASE 3  baseline (%d frames)", self.cfg.capture.baseline_frames)
         s = self.cfg.sweep
         rest = sweep.Step(idx=-1, row=s.start_row, col=s.start_col, h=s.window_h,
@@ -1155,7 +1183,9 @@ def main(argv=None) -> int:
                            cfg.chip.rows, cfg.chip.cols)
     chip = ChipController(backend, cfg.chip.rows, cfg.chip.cols, cfg.chip.volts,
                           armed=cfg.armed, step_delay_s=cfg.sweep.step_delay_s,
-                          volt_tolerance=cfg.chip.volt_tolerance)
+                          volt_tolerance=cfg.chip.volt_tolerance,
+                          volt_settle_s=cfg.chip.volt_settle_s,
+                          power_settle_s=cfg.chip.power_settle_s)
 
     cli_corners = parse_corners(args.corners)
     if cli_corners:
