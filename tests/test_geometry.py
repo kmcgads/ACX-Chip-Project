@@ -133,3 +133,56 @@ class TestRegistrationCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPhysicalUnits(unittest.TestCase):
+    """Pitch resolved 2026-08-10: 31.55 mm / 128 = 246.48 um."""
+
+    PITCH = 246.48
+
+    def test_pitch_reproduces_the_measured_grid_width(self):
+        self.assertAlmostEqual(
+            geometry.electrodes_to_um(128, self.PITCH) / 1000.0, 31.55, places=2)
+
+    def test_pitch_reproduces_the_measured_grid_area(self):
+        mm2 = geometry.footprint_um2(128 * 128, self.PITCH) / 1e6
+        self.assertAlmostEqual(mm2, 995.4025, delta=0.1)
+
+    def test_cell_area(self):
+        self.assertAlmostEqual(geometry.electrode_area_um2(self.PITCH),
+                               60752.4, delta=1.0)
+
+    def test_volume_is_none_without_a_gap(self):
+        """The footprint follows from the pitch; the volume does not. Callers
+        must handle None rather than have a number invented for them."""
+        self.assertIsNone(geometry.droplet_volume_nl(1, self.PITCH, None))
+
+    def test_volume_with_a_gap(self):
+        self.assertAlmostEqual(
+            geometry.droplet_volume_nl(1, self.PITCH, 100.0), 6.075, delta=0.01)
+        self.assertAlmostEqual(
+            geometry.droplet_volume_nl(25, self.PITCH, 100.0), 151.9, delta=0.5)
+
+    def test_bad_gap_rejected(self):
+        with self.assertRaises(ValueError):
+            geometry.droplet_volume_nl(1, self.PITCH, -5.0)
+
+
+class TestPitchIsWiredIntoConfig(unittest.TestCase):
+
+    def test_config_carries_the_resolved_pitch(self):
+        from chiphealth.config import ChipConfig
+        c = ChipConfig()
+        self.assertAlmostEqual(c.pitch_um, 246.48, places=2)
+        self.assertAlmostEqual(c.grid_width_mm, 31.55, places=2)
+
+    def test_gap_remains_unknown(self):
+        from chiphealth.config import ChipConfig
+        self.assertIsNone(ChipConfig().gap_um)
+
+    def test_config_pitch_matches_its_own_grid_measurement(self):
+        """Guards against the two numbers drifting apart in edits."""
+        from chiphealth.config import ChipConfig
+        c = ChipConfig()
+        self.assertAlmostEqual(c.pitch_um, c.grid_width_mm * 1000.0 / c.cols,
+                               places=2)

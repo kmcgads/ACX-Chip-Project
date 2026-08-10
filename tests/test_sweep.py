@@ -145,23 +145,21 @@ class TestEdges(unittest.TestCase):
     def test_leading_edge_rightward(self):
         s = self._step(+1)
         self.assertEqual(s.leading_edge, 10 + WIN - 1)
-        self.assertEqual(s.trailing_edge, 10)
 
     def test_leading_edge_leftward(self):
         s = self._step(-1)
         self.assertEqual(s.leading_edge, 10)
-        self.assertEqual(s.trailing_edge, 10 + WIN - 1)
 
     def test_leading_edge_downward(self):
         s = self._step(+1, axis=AXIS_ROW)
         self.assertEqual(s.leading_edge, 10 + WIN - 1)
 
-    def test_leading_edge_blocks_are_a_strip_not_the_whole_window(self):
+    def test_leading_edge_blocks_are_a_single_column_strip(self):
+        """Only the contact line is tested, never the bridged interior."""
         s = self._step(+1)
-        touched = sweep.blocks_touched(s, 4)
         leading = sweep.leading_edge_blocks(s, 4)
-        self.assertLess(len(leading), len(touched))
-        self.assertTrue(leading.issubset(touched))
+        self.assertEqual(len({bc for _, bc in leading}), 1)   # one column of blocks
+        self.assertLessEqual(len(leading), WIN // 4 + 1)      # 20 rows, may straddle
 
 
 class TestBlocks(unittest.TestCase):

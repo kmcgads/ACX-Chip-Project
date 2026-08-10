@@ -156,3 +156,53 @@ class TestDrift(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShapeCoercion(unittest.TestCase):
+    """as_corners / as_frame_size validate shape; they are not casts.
+
+    The old code built corners with a generator, giving the loose type
+    tuple[tuple[float, ...], ...] -- which silently admits a 3-element "point"
+    that would then be fed to a homography fit.
+    """
+
+    def test_good_corners(self):
+        self.assertEqual(
+            calibration.as_corners([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            ((1.0, 2.0), (3.0, 4.0), (5.0, 6.0), (7.0, 8.0)))
+
+    def test_coerces_to_float(self):
+        out = calibration.as_corners([(1, 2), (3, 4), (5, 6), (7, 8)])
+        self.assertTrue(all(isinstance(v, float) for p in out for v in p))
+
+    def test_rejects_a_three_element_point_naming_the_index(self):
+        with self.assertRaises(ValueError) as ctx:
+            calibration.as_corners([[1, 2, 3], [3, 4], [5, 6], [7, 8]])
+        self.assertIn("corner 0", str(ctx.exception))
+
+    def test_rejects_wrong_corner_count(self):
+        with self.assertRaises(ValueError):
+            calibration.as_corners([[1, 2], [3, 4], [5, 6]])
+        with self.assertRaises(ValueError):
+            calibration.as_corners([[1, 2]] * 5)
+
+    def test_rejects_a_scalar_point(self):
+        with self.assertRaises(ValueError):
+            calibration.as_corners([1, 2, 3, 4])
+
+    def test_frame_size_good(self):
+        self.assertEqual(calibration.as_frame_size([1920.0, 1080.0]), (1920, 1080))
+
+    def test_frame_size_rejects_wrong_arity(self):
+        with self.assertRaises(ValueError):
+            calibration.as_frame_size((1920, 1080, 3))
+        with self.assertRaises(ValueError):
+            calibration.as_frame_size(1920)
+
+    def test_round_trips_through_calibration(self):
+        cal = Calibration(
+            corners_px=calibration.as_corners([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            frame_size=calibration.as_frame_size((1920, 1080)))
+        again = Calibration.from_dict(cal.to_dict())
+        self.assertEqual(again.corners_px, cal.corners_px)
+        self.assertEqual(again.frame_size, (1920, 1080))
