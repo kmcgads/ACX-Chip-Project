@@ -55,13 +55,6 @@ class Step:
             return self.col + self.w - 1 if self.direction > 0 else self.col
         return self.row + self.h - 1 if self.direction > 0 else self.row
 
-    @property
-    def trailing_edge(self) -> int:
-        """Electrode index of the edge leaving territory behind it."""
-        if self.axis == AXIS_COL:
-            return self.col if self.direction > 0 else self.col + self.w - 1
-        return self.row if self.direction > 0 else self.row + self.h - 1
-
     def covers(self) -> tuple[int, int, int, int]:
         """(row_start, row_end, col_start, col_end), inclusive."""
         return self.row, self.row + self.h - 1, self.col, self.col + self.w - 1
@@ -269,16 +262,6 @@ def block_bounds(block_row: int, block_col: int, block: int
 def block_grid_shape(chip_rows: int, chip_cols: int, block: int) -> tuple[int, int]:
     """Verdict-map dimensions. 128x128 at block=4 gives 32x32 = 1024 blocks."""
     return (chip_rows + block - 1) // block, (chip_cols + block - 1) // block
-
-
-def blocks_touched(step: Step, block: int) -> set[tuple[int, int]]:
-    """Blocks the commanded window overlaps at this step."""
-    r0, r1, c0, c1 = step.covers()
-    out: set[tuple[int, int]] = set()
-    for r in range(r0, r1 + 1):
-        for c in range(c0, c1 + 1):
-            out.add(block_of(r, c, block))
-    return out
 
 
 def leading_edge_blocks(step: Step, block: int) -> set[tuple[int, int]]:

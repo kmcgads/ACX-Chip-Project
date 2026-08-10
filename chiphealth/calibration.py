@@ -66,6 +66,39 @@ class Calibration:
         )
 
 
+def as_corners(points) -> tuple[tuple[float, float], ...]:
+    """Coerce four (x, y) points into a fixed-shape tuple of pairs.
+
+    Validation, not a cast. The unpack ``x, y = p`` raises on any point that is
+    not exactly two values, so a malformed corner list fails here rather than
+    flowing into a homography that would happily fit whatever it was given.
+    It also gives the declared type its real shape -- a generator-built
+    ``tuple(tuple(...) for ...)`` is ``tuple[tuple[float, ...], ...]``, which
+    silently admits 3-element "points".
+    """
+    out: list[tuple[float, float]] = []
+    for i, p in enumerate(points):
+        try:
+            x, y = p
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"corner {i} is not an (x, y) pair: {p!r}") from exc
+        out.append((float(x), float(y)))
+    if len(out) != 4:
+        raise ValueError(f"expected 4 corners, got {len(out)}")
+    return tuple(out)
+
+
+def as_frame_size(value) -> tuple[int, int]:
+    """Coerce a (width, height) pair, rejecting anything else."""
+    try:
+        w, h = value
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"frame size is not a (width, height) pair: "
+                         f"{value!r}") from exc
+    return (int(w), int(h))
+
+
 def load_cache(path) -> Calibration | None:
     """Previous calibration, or None. A corrupt cache is ignored, not fatal."""
     p = Path(path)

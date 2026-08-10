@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 
 from . import DETECTOR_VERSION
-from .sweep import AXIS_COL, Step, block_of
+from .sweep import AXIS_COL, Step, block_of, leading_edge_blocks
 
 KIND_DRAG = "drag"
 KIND_NO_MOVEMENT = "no_movement"
@@ -170,7 +170,7 @@ class Detector:
 
         lag = compute_lag(step, primary)
         result.lag = lag
-        result.tested_blocks = self._leading_blocks(step)
+        result.tested_blocks = leading_edge_blocks(step, self.block)
 
         drag = self._check_drag(step, obs, lag, result.tested_blocks)
         if drag:
@@ -285,13 +285,6 @@ class Detector:
         self._swept |= self._current - window
         self._current = window
 
-    def _leading_blocks(self, step: Step) -> set[tuple[int, int]]:
-        r0, r1, c0, c1 = step.covers()
-        edge = step.leading_edge
-        if step.axis == AXIS_COL:
-            return {block_of(r, edge, self.block) for r in range(r0, r1 + 1)}
-        return {block_of(edge, c, self.block) for c in range(c0, c1 + 1)}
-
     def _edge_location(self, step: Step) -> tuple[float, float]:
         """A representative electrode on the leading edge, for localisation."""
         r0, r1, c0, c1 = step.covers()
@@ -321,6 +314,3 @@ class Detector:
     @property
     def swept_cells(self) -> set[tuple[int, int]]:
         return set(self._swept)
-
-    def swept_blocks(self) -> set[tuple[int, int]]:
-        return {block_of(r, c, self.block) for r, c in self._swept}

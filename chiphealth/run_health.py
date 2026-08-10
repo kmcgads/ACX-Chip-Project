@@ -35,10 +35,15 @@ from . import calibration, simulate, sweep
 from .actuation import ChipController, Drop, make_backend
 from .config import RunConfig, from_env
 from .detector import Detector, Observation
-from .geometry import check_registration
+from .geometry import ElectrodeFrame, check_registration
 from .recorder import DEGRADED, FAIL, RunRecorder
 
 log = logging.getLogger("chiphealth")
+
+# Below this, a 1-electrode feature is only a few pixels and the detector's
+# electrode-unit thresholds sit at the noise floor. Not a hard limit -- a
+# warning, because the operator can still choose to proceed.
+MIN_USABLE_PX_PER_ELECTRODE = 4.0
 
 
 # ── frame sources ────────────────────────────────────────────────────────────
@@ -58,6 +63,10 @@ class SyntheticSource:
         idx = self.index
         self.index += 1
         return idx, None, self.rig.observe(step, idx, t)
+
+    def read_raw(self):
+        """No camera, so no frame. The picker never runs against this source."""
+        return None
 
     def close(self) -> None:
         pass
@@ -82,6 +91,16 @@ class CameraSource:
                                min_saturation=self.min_saturation)
         return idx, frame, obs
 
+    def read_raw(self):
+        """A frame with no analysis run on it.
+
+        The corner picker needs this: detection converts pixels to electrode
+        coordinates, which requires the registration the picker exists to
+        establish. Calling read() before corners are picked raises
+        "camera is not registered to the chip" on the very first frame.
+        """
+        return self.cam.read_frame()[1]
+
     def close(self) -> None:
         self.cam.close_stream()
 
@@ -94,27 +113,50 @@ class LiveView:
     This is the "show electrode actuation taking place" half of Priority 1, and
     it is also how the operator notices a run going wrong early enough to stop
     it.
+
+    This base class is the **headless implementation**: every method is a
+    working no-op. It is what a synthetic or --headless run gets, and what any
+    run gets when OpenCV is unavailable.
+
+    Structured as a null object rather than as one class holding
+    ``cv2 = None``. Under the old shape, ``self.cv2`` was genuinely None on
+    every headless run, and methods like ``render_commanded`` dereferenced it
+    without a guard -- safe only because their one caller happened to check
+    first. That is an invariant living in the call sites rather than in the
+    object, and it would break the moment anything else called them. Here the
+    subclass holds a real module or does not exist, so there is nothing to
+    guard and nothing to get wrong.
     """
 
-    def __init__(self, chip_rows: int, chip_cols: int, enabled: bool = True,
+    enabled = False
+
+    def render_commanded(self, step, swept):
+        return None
+
+    def show(self, step, swept, frame, events) -> bool:
+        """No window to draw. Never asks the caller to stop."""
+        return True
+
+    def close(self) -> None:
+        pass
+
+
+class OpenCvLiveView(LiveView):
+    """The real two-pane window.
+
+    ``cv2`` and ``np`` are injected and non-optional: an instance of this class
+    cannot exist without them.
+    """
+
+    enabled = True
+
+    def __init__(self, chip_rows: int, chip_cols: int, cv2, np,
                  scale: int = 4) -> None:
         self.rows = chip_rows
         self.cols = chip_cols
         self.scale = scale
-        self.cv2 = None
-        self.np = None
-        if not enabled:
-            return
-        try:  # lazy: a synthetic run must not need OpenCV
-            import cv2
-            import numpy as np
-            self.cv2, self.np = cv2, np
-        except ImportError:
-            log.warning("OpenCV not available -- running without the live window.")
-
-    @property
-    def enabled(self) -> bool:
-        return self.cv2 is not None
+        self.cv2 = cv2
+        self.np = np
 
     def render_commanded(self, step, swept):
         """The client-side model: what we believe is energised.
@@ -134,8 +176,6 @@ class LiveView:
 
     def show(self, step, swept, frame, events) -> bool:
         """Draw one update. Returns False if the operator pressed q."""
-        if not self.enabled:
-            return True
         panes = [self.render_commanded(step, swept)]
         if frame is not None:
             h = panes[0].shape[0]
@@ -149,8 +189,29 @@ class LiveView:
         return self.cv2.waitKey(1) & 0xFF != ord("q")
 
     def close(self) -> None:
-        if self.enabled:
-            self.cv2.destroyAllWindows()
+        self.cv2.destroyAllWindows()
+
+
+def _try_import_cv2():
+    """(cv2, numpy) if OpenCV is importable, else (None, None)."""
+    try:
+        import cv2
+        import numpy as np
+        return cv2, np
+    except ImportError:
+        return None, None
+
+
+def make_live_view(chip_rows: int, chip_cols: int, enabled: bool = True,
+                   scale: int = 4) -> LiveView:
+    """Pick the real window or the headless no-op. The only place that decides."""
+    if not enabled:
+        return LiveView()
+    cv2, np = _try_import_cv2()
+    if cv2 is None:
+        log.warning("OpenCV not available -- running without the live window.")
+        return LiveView()
+    return OpenCvLiveView(chip_rows, chip_cols, cv2, np, scale)
 
 
 class CornerPicker:
@@ -162,21 +223,27 @@ class CornerPicker:
     Registration is redone each run because the camera moves between runs. The
     previous run's corners are offered as a starting proposal, so a small nudge
     does not mean picking blind.
+
+    ``cv2`` is injected and non-optional: use :meth:`create`, which returns
+    None when OpenCV is unavailable. An instance therefore always has a working
+    module, so ``pick`` and ``_draw`` need no guards -- previously they had
+    none *and* dereferenced a possibly-None attribute, safe only because the
+    single call site checked first.
     """
 
     WINDOW = "registration - click the 4 corners of the ELECTRODE ARRAY"
 
-    def __init__(self) -> None:
-        self.cv2 = None
-        try:
-            import cv2
-            self.cv2 = cv2
-        except ImportError:
-            log.warning("OpenCV not available -- cannot pick corners.")
+    def __init__(self, cv2) -> None:
+        self.cv2 = cv2
 
-    @property
-    def enabled(self) -> bool:
-        return self.cv2 is not None
+    @classmethod
+    def create(cls) -> "CornerPicker | None":
+        """A picker, or None if OpenCV is unavailable."""
+        cv2, _ = _try_import_cv2()
+        if cv2 is None:
+            log.warning("OpenCV not available -- cannot pick corners.")
+            return None
+        return cls(cv2)
 
     def pick(self, grab, proposal=None):
         """Returns four (x, y) points, or None if the operator cancelled."""
@@ -409,8 +476,25 @@ class HealthRun:
                 self.rec.note(msg)
                 return False
             cam.set_registration(corners, self.cfg.chip.rows, self.cfg.chip.cols)
-            self.ask.ask("Adjust focus by hand now (autofocus is off).", self.now())
+            self.ask.ask(
+                "Adjust focus by hand now (autofocus is off)." if not
+                self.cfg.capture.autofocus else
+                "Check focus looks right (autofocus is on).", self.now())
             self._record_calibration(corners, cam)
+
+        if self.cfg.skip_droplet_check:
+            # Holding a droplet at a known position needs 45V on this hardware,
+            # so a no-voltage run has nothing to check the frame against. The
+            # picker and the artifact path can still be exercised -- but every
+            # coordinate downstream is then trusted rather than confirmed.
+            msg = ("Droplet check SKIPPED (--no-droplet-check): the coordinate "
+                   "frame is UNVERIFIED. Positions this run are trusted, not "
+                   "confirmed. Do not read its verdicts as measurements. "
+                   "Top-up prompts are disabled too -- with no droplet, every "
+                   "frame would look like liquid running out.")
+            log.warning(msg)
+            self.rec.note(msg)
+            return True
 
         s = self.cfg.sweep
         probe = sweep.Step(idx=-1, row=s.start_row, col=s.start_col,
@@ -466,16 +550,17 @@ class HealthRun:
         if not cap.pick_corners:
             return None
 
-        picker = CornerPicker()
-        if not picker.enabled:
+        picker = CornerPicker.create()
+        if picker is None:
             self.rec.note("Corner picking needs OpenCV, which is unavailable.")
             return None
 
         frame_size = getattr(self.source, "frame_size", None)
         proposal = cached.corners_px if cached else None
         for attempt in range(1, attempts + 1):
-            picked = picker.pick(lambda: self.source.read(
-                self._resting_step(), self.now())[1], proposal)
+            # read_raw, not read: analysis needs the registration we are about
+            # to create, so running it here would fail on the first frame.
+            picked = picker.pick(self.source.read_raw, proposal)
             if picked is None:
                 log.warning("Corner picking cancelled.")
                 return None
@@ -509,13 +594,21 @@ class HealthRun:
         magnification, so the scale goes in the record. A noisy week should be
         explicable, not mysterious.
         """
+        # isinstance, not hasattr: this wants a real ElectrodeFrame, and saying
+        # so narrows the type instead of leaving `reg` possibly-None at the
+        # dereference. The old hasattr check was also quietly shaped around a
+        # test stub whose `registration` is a plain string.
         reg = getattr(cam, "registration", None)
-        ppe = (tuple(reg.px_per_electrode()) if hasattr(reg, "px_per_electrode")
-               else (0.0, 0.0))
-        frame_size = tuple(getattr(self.source, "frame_size", None) or (0, 0))
+        ppe: tuple[float, float] = (0.0, 0.0)
+        if isinstance(reg, ElectrodeFrame):
+            px_col, px_row = reg.px_per_electrode()
+            ppe = (float(px_col), float(px_row))
+
+        frame_size = calibration.as_frame_size(
+            getattr(self.source, "frame_size", None) or (0, 0))
 
         cal = calibration.Calibration(
-            corners_px=tuple(tuple(float(v) for v in p) for p in corners),
+            corners_px=calibration.as_corners(corners),
             frame_size=frame_size, px_per_electrode=ppe,
             created=datetime.now(timezone.utc).isoformat(),
             chip_id=self.cfg.chip_id)
@@ -526,6 +619,20 @@ class HealthRun:
         self.rec.note(f"Calibration: {line}")
         if ppe != (0.0, 0.0):
             log.info("Scale: %.2f x %.2f px per electrode.", *ppe)
+            # Every detector threshold is in electrode units, so the scale sets
+            # what they mean in pixels. The 2026-08-10 dry run came in at
+            # 1.7 x 1.4, making the 1-electrode residue threshold ~2.4 px^2 --
+            # noise. Say so during the run, not afterwards in analysis.
+            worst = min(ppe)
+            if worst < MIN_USABLE_PX_PER_ELECTRODE:
+                msg = (f"SCALE TOO COARSE: {worst:.2f} px per electrode. One "
+                       f"electrode is ~{worst ** 2:.1f} px^2, so a 1-electrode "
+                       f"threshold is near the noise floor and verdicts will "
+                       f"not be trustworthy. Raise the capture resolution or "
+                       f"move the camera closer so the chip fills more of the "
+                       f"frame.")
+                log.warning(msg)
+                self.rec.note(msg)
 
         self.rec.record_calibration({"calibration": cal.to_dict(),
                                      "drift": report})
@@ -642,6 +749,9 @@ class HealthRun:
         about that path.
         """
         if not targets or self.aborted:
+            # Say so. Silence here is indistinguishable from a skipped phase.
+            log.info("PHASE 6  fine pass skipped (%s)",
+                     "run aborted" if self.aborted else "nothing flagged")
             return
         log.info("PHASE 6  fine pass (%d targets)", len(targets))
         self.det.stage = "fine"
@@ -673,7 +783,9 @@ class HealthRun:
         self.source.close()
         self.view.close()
         stats = self.rec.finalize({"aborted": self.aborted})
-        log.info("coverage: %s", stats["coverage"])
+        log.info("coverage (%d-electrode blocks, %d total): %s",
+                 self.cfg.sweep.block ** 2, sum(stats["coverage"].values()),
+                 stats["coverage"])
         log.info("artifacts: %s", self.rec.paths.root)
         return stats
 
@@ -749,6 +861,13 @@ class HealthRun:
         Left unhandled, every remaining step would report failure.
         """
         cap = self.cfg.capture
+        # Both this and the registration droplet check assume a real droplet
+        # exists, so they travel together. Without one the largest on-chip blob
+        # is some artifact -- ~89 electrodes against an expected 400 in the
+        # 2026-08-10 run -- so every frame looks like liquid running out and the
+        # operator gets prompted until max_topups stops it.
+        if self.cfg.skip_droplet_check:
+            return True
         if not cap.topup_enabled or self._topups >= cap.max_topups:
             return True
 
@@ -937,7 +1056,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Simulate only: dead blocks as 'br,bc;br,bc' or "
                         "columns as 'col=61'.")
     p.add_argument("--camera", type=int, default=None,
-                   help="Camera index for the real run (camera.py uses 1).")
+                   help="OpenCV device index (default 0). Depends on which "
+                        "cameras are connected, so check the picker shows the "
+                        "chip and not another camera.")
     p.add_argument("--corners", default="",
                    help="Chip corners 'x,y;x,y;x,y;x,y' (TL;TR;BR;BL) of the "
                         "128x128 electrode array. Overrides capture.corners_px "
@@ -963,6 +1084,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="'both' adds a vertical sweep at double the cost.")
     p.add_argument("--max-fine-targets", type=int, default=None)
     p.add_argument("--runs-root", default=None)
+    p.add_argument("--no-droplet-check", action="store_true",
+                   help="Skip the phase-2 droplet check. For a no-voltage run: "
+                        "holding a droplet at a known position needs 45V, so "
+                        "with the chip unpowered there is nothing to verify the "
+                        "coordinate frame against. Positions become trusted "
+                        "rather than confirmed.")
+    p.add_argument("--autofocus", action="store_true",
+                   help="Leave camera autofocus ON. Default is off, which suits "
+                        "a microscope with a manual focus ring; a webcam has no "
+                        "ring, so off can leave it stuck out of focus.")
     p.add_argument("--headless", action="store_true", help="No live window.")
     p.add_argument("--non-interactive", action="store_true",
                    help="Auto-acknowledge operator prompts.")
@@ -1028,10 +1159,14 @@ def main(argv=None) -> int:
 
     cli_corners = parse_corners(args.corners)
     if cli_corners:
-        cfg.capture.corners_px = tuple(tuple(p) for p in cli_corners)
+        # as_corners validates the shape, so a malformed --corners fails here
+        # with a clear message rather than inside a homography fit.
+        cfg.capture.corners_px = calibration.as_corners(cli_corners)
     if args.frame_size:
         w, h = (int(v) for v in args.frame_size.lower().split("x"))
         cfg.capture.expected_frame_size = (w, h)
+    cfg.capture.autofocus = args.autofocus
+    cfg.skip_droplet_check = args.no_droplet_check
     cfg.capture.reuse_calibration = args.reuse_calibration
     cfg.capture.pick_corners = not args.no_pick
     if args.calibration_cache:
@@ -1042,13 +1177,15 @@ def main(argv=None) -> int:
     else:
         source = _camera_source(cfg)
 
-    view = LiveView(cfg.chip.rows, cfg.chip.cols,
-                    enabled=not cfg.headless and not args.simulate)
+    view = make_live_view(cfg.chip.rows, cfg.chip.cols,
+                          enabled=not cfg.headless and not args.simulate)
     prompter = Prompter(rec, interactive=not (args.non_interactive or args.simulate))
 
     run = HealthRun(cfg, chip, source, rec, view, prompter)
     stats = run.run()
-    print(f"\nRun {run_id}: {stats['events']} events, coverage {stats['coverage']}")
+    blk = cfg.sweep.block
+    print(f"\nRun {run_id}: {stats['events']} events, "
+          f"coverage in {blk}x{blk}-electrode blocks {stats['coverage']}")
     print(f"Artifacts: {rec.paths.root}")
     return 1 if stats.get("aborted") else 0
 
@@ -1095,14 +1232,19 @@ def _camera_source(cfg: RunConfig):
     from camera import CameraInterface  # the researcher's own camera module
 
     cam = CameraInterface(camera_address=cfg.capture.camera_address)
-    cam.open_stream(autofocus=cfg.capture.autofocus)
+    requested = None
+    if cfg.capture.frame_width and cfg.capture.frame_height:
+        requested = (cfg.capture.frame_width, cfg.capture.frame_height)
+    cam.open_stream(autofocus=cfg.capture.autofocus, resolution=requested)
 
     # Measure what the device is actually delivering, so the hardcoded pixel
     # calibration can be checked against it in phase 2.
     _, frame = cam.read_frame()
     height, width = frame.shape[:2]
-    log.info("Camera delivering %dx%d (%.1f px per electrode across %d columns)",
-             width, height, width / cfg.chip.cols, cfg.chip.cols)
+    log.info("Camera delivering %dx%d", width, height)
+    if requested and (width, height) != requested:
+        log.warning("Requested %dx%d but the camera returned %dx%d -- it does "
+                    "not support that mode.", *requested, width, height)
 
     if cfg.capture.corners_px:
         cam.set_registration(cfg.capture.corners_px, cfg.chip.rows, cfg.chip.cols)

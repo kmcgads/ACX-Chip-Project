@@ -31,11 +31,32 @@ class ChipConfig:
     rows: int = 128
     cols: int = 128
 
-    # Electrode pitch in micrometres. Deliberately unknown: deferred to
-    # Priority 3 (spec/objectives.md §1.4, §3.1). Everything in this package
-    # works in *electrode* units, so this is only needed to report physical
-    # dimensions. Do not invent a value.
-    pitch_um: float | None = None
+    # Electrode pitch in micrometres -- the physical width of one electrode,
+    # and the constant that converts electrode counts into real distance.
+    #
+    # RESOLVED 2026-08-10 by researcher measurement, closing the question
+    # deferred at spec/objectives.md §1.4 and §3.1:
+    #
+    #     active grid   31.55 mm square  (995.4025 mm^2)
+    #     electrodes    128 x 128 = 16,384
+    #     pitch         31.55 mm / 128 = 246.48 um
+    #     cell area     246.48^2 = 60,752 um^2 = 0.0608 mm^2
+    #
+    # Everything in this package still computes in *electrode* units; the pitch
+    # is only applied when reporting physical dimensions, so it cannot perturb
+    # detection. See geometry.electrodes_to_um and friends.
+    pitch_um: float | None = 246.48
+
+    # Physical extent of the active electrode array, for cross-checking the
+    # pitch against a measurement rather than trusting one number.
+    grid_width_mm: float = 31.55
+    grid_height_mm: float = 31.55
+
+    # Plate gap in micrometres -- the spacing between the electrode surface and
+    # the top plate. STILL UNKNOWN. Footprint area comes from the pitch, but
+    # volume needs this too, so droplet volumes stay unreportable until it is
+    # measured. Do not invent a value.
+    gap_um: float | None = None
 
     # Voltage rails. 45V on the first three, matching chipsetup.py:47 and
     # cleanup.py:64-72. 45V is the agreed degradation-tracking baseline
@@ -131,8 +152,20 @@ class DetectorConfig:
 class CaptureConfig:
     """Video, stills and dataset capture (spec/objectives.md §1.8)."""
 
-    camera_address: int | str = 1  # camera.py:200 uses index 1
+    # OpenCV/DirectShow device index. NOT a fixed property of the microscope --
+    # it depends on which cameras are connected when the process starts, so it
+    # can move if a webcam is plugged in or the microscope is on a different
+    # port. Override with --camera. Researcher confirmed 0 on 2026-08-10.
+    camera_address: int | str = 0
     autofocus: bool = False  # off for measurement runs, researcher 2026-08-06
+
+    # Capture resolution to request. Unset, the c922 driver defaults to
+    # 640x480, at which the chip spanned ~1.7 px per electrode in the
+    # 2026-08-10 dry run -- so a 1-electrode residue threshold was ~2.4 px^2,
+    # i.e. noise. The device falls back silently if it cannot honour this, and
+    # the delivered size is measured either way. None leaves the driver default.
+    frame_width: int | None = 1920
+    frame_height: int | None = 1080
 
     # ── fixed camera calibration ─────────────────────────────────────────────
     #
@@ -207,6 +240,12 @@ class RunConfig:
     backend: str = "auto"  # "auto" | "real" | "fake"
 
     headless: bool = False  # skip the live window
+
+    # Skip the phase-2 droplet check. Needed for a no-voltage run: this
+    # hardware requires 45V to hold a droplet at a known position, so with the
+    # chip unpowered there is nothing to validate the coordinate frame against.
+    # The run then trusts the picked corners instead of confirming them.
+    skip_droplet_check: bool = False
 
     @property
     def dll_path(self) -> str:

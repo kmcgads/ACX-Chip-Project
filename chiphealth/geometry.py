@@ -15,9 +15,11 @@ Coordinate conventions, fixed here and used everywhere downstream:
   electrode ``(r, c)`` is ``(c-0.5, r-0.5)``.
 * Pixel coordinates are OpenCV's: ``(x, y)``, x rightwards, y downwards.
 
-Electrode pitch is deliberately not used. Corner registration gives the whole
-mapping; the pitch (deferred to Priority 3, spec/objectives.md §3.1) would only
-be needed to report micrometres instead of electrode counts.
+The electrode pitch plays no part in the pixel mapping. Corner registration
+gives that outright, so nothing in detection depends on the pitch and a wrong
+value could not perturb a verdict. The pitch is applied only at the reporting
+boundary, converting electrode counts into micrometres -- see
+:func:`electrodes_to_um` and friends at the end of this module.
 """
 
 from __future__ import annotations
@@ -268,3 +270,51 @@ def check_registration(observed_centroid_rc: tuple[float, float],
         centroid_error_electrodes=centroid_err,
         area_ratio=float(area_ratio),
     )
+
+
+# ── physical units ───────────────────────────────────────────────────────────
+#
+# Everything above, and every threshold in the detector, works in electrode
+# units. These convert at the reporting boundary only. Keeping the split sharp
+# means the pitch can be wrong without changing a single verdict -- it would
+# only mislabel the axes of a report.
+#
+# Pitch resolved 2026-08-10: 31.55 mm / 128 = 246.48 um (config.ChipConfig).
+
+
+def electrodes_to_um(n: float, pitch_um: float) -> float:
+    """Electrode counts to micrometres along one axis."""
+    return float(n) * float(pitch_um)
+
+
+def electrode_area_um2(pitch_um: float) -> float:
+    """Footprint of a single electrode cell, in square micrometres."""
+    return float(pitch_um) ** 2
+
+
+def footprint_um2(n_electrodes: float, pitch_um: float) -> float:
+    """Footprint of a droplet covering ``n_electrodes`` cells."""
+    return float(n_electrodes) * electrode_area_um2(pitch_um)
+
+
+def droplet_volume_nl(n_electrodes: float, pitch_um: float,
+                      gap_um: float | None) -> float | None:
+    """Approximate droplet volume in nanolitres.
+
+    Returns None when the plate gap is unknown, which it currently is. The
+    footprint follows from the pitch, but volume does not -- a droplet is a
+    slab, and without its thickness any figure would be invented. Callers must
+    handle None rather than substitute a guess.
+
+    Treats the droplet as a right prism over its footprint: real droplets bulge
+    at the edges, so this is a lower bound on the true volume, not a
+    measurement.
+    """
+    if gap_um is None:
+        return None
+    if gap_um <= 0:
+        raise ValueError("gap_um must be positive")
+    um3 = footprint_um2(n_electrodes, pitch_um) * float(gap_um)
+    return um3 / 1e6  # 1 nL = 1e6 um^3
+
+
