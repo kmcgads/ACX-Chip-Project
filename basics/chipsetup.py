@@ -9,7 +9,7 @@ from ctypes import POINTER, c_int, c_void_p, c_char_p, Structure
 from typing import List
 
 # Load library
-microfluidics = ctypes.CDLL("path_to_ACX_provided_DLL")  
+microfluidics = ctypes.CDLL(r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows\DLLTest.dll")  
 
 # Define structure Drop
 class Drop(Structure):
