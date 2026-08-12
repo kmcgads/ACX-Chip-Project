@@ -49,8 +49,10 @@ class TestSerpentine(unittest.TestCase):
         self.steps = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
 
     def test_step_count_and_cost(self):
-        self.assertEqual(len(self.steps), 901)
-        self.assertAlmostEqual(sweep.total_duration_s(self.steps, 0.5), 450.5)
+        # 1802 = 901 electrode-moves x 2 (grow + release), so the droplet is
+        # never asked to release behind and grab ahead in the same instant.
+        self.assertEqual(len(self.steps), 1802)
+        self.assertAlmostEqual(sweep.total_duration_s(self.steps, 0.5), 901.0)
 
     def test_every_electrode_is_reached(self):
         """The whole point of the priming leg and the row-1 band start."""
@@ -65,7 +67,7 @@ class TestSerpentine(unittest.TestCase):
         old = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL,
                                     first_band_row=START_ROW, prime=False)
         missed = sweep.untested_electrodes(old, ROWS, COLS)
-        self.assertEqual(len(old), 867)
+        self.assertEqual(len(old), 1734)   # 867 moves x 2
         self.assertEqual(len(missed), 448)
         self.assertEqual(len({c for r, c in missed if r == 1}), 128)
         self.assertEqual(sorted({c for r, c in missed if r == 2}), list(range(5, 21)))
@@ -73,7 +75,22 @@ class TestSerpentine(unittest.TestCase):
     def test_the_fix_costs_34_steps(self):
         old = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL,
                                     first_band_row=START_ROW, prime=False)
-        self.assertEqual(len(self.steps) - len(old), 34)
+        self.assertEqual(len(self.steps) - len(old), 68)   # 34 moves x 2
+
+    def test_steps_alternate_grow_then_release(self):
+        for a, b in zip(self.steps[::2], self.steps[1::2]):
+            self.assertEqual(a.kind, sweep.KIND_GROW)
+            self.assertEqual(b.kind, sweep.KIND_RELEASE)
+
+    def test_a_grow_never_releases_anything(self):
+        """The whole point: previously-energised cells must stay energised."""
+        prev = None
+        for s in self.steps:
+            r0, r1, c0, c1 = s.covers()
+            cur = {(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)}
+            if prev is not None and s.kind == sweep.KIND_GROW:
+                self.assertTrue(prev <= cur, f"grow at step {s.idx} dropped cells")
+            prev = cur
 
     def test_window_never_leaves_the_chip(self):
         for s in self.steps:
@@ -82,18 +99,20 @@ class TestSerpentine(unittest.TestCase):
             self.assertLessEqual(s.row + s.h - 1, ROWS)
             self.assertLessEqual(s.col + s.w - 1, COLS)
 
-    def test_every_move_is_exactly_one_electrode(self):
+    def test_no_step_moves_more_than_one_electrode(self):
         """EWOD transport cannot jump: the window must overlap the droplet."""
         prev = (START_ROW, START_COL)
         for s in self.steps:
-            self.assertEqual(abs(s.row - prev[0]) + abs(s.col - prev[1]), 1,
-                             f"step {s.idx} jumped from {prev} to {(s.row, s.col)}")
+            # A grow leaves the origin put and widens; only the release
+            # advances it. So the bound is one, not exactly one.
+            self.assertLessEqual(abs(s.row - prev[0]) + abs(s.col - prev[1]), 1,
+                                 f"step {s.idx} jumped from {prev} to {(s.row, s.col)}")
             prev = (s.row, s.col)
 
     def test_run_climbs_to_row_one_before_sweeping(self):
         """The droplet loads at row 2; band 0 starts at row 1."""
         first = self.steps[0]
-        self.assertEqual(first.kind, sweep.KIND_BAND_CHANGE)
+        self.assertEqual(first.kind, sweep.KIND_GROW)
         self.assertEqual(first.axis, AXIS_ROW)
         self.assertEqual(first.direction, -1)
         self.assertEqual(first.row, 1)
@@ -101,19 +120,23 @@ class TestSerpentine(unittest.TestCase):
     def test_band_zero_primes_out_and_back(self):
         """Right to col_min+w, back to col_min, then away -- the corner turn
         every other band gets for free from its band change."""
-        band0 = [s for s in self.steps if s.band == 0 and s.kind == sweep.KIND_TRAVEL]
+        band0 = [s for s in self.steps if s.band == 0 and s.axis == AXIS_COL]
         cols = [s.col for s in band0]
-        self.assertEqual(cols[0], START_COL + 1)      # heads right first
-        self.assertEqual(max(cols[:20]), 21)          # out to col_min + w
+        # The first step is a grow, which widens without moving the
+        # origin; the release that follows is what advances it.
+        self.assertEqual(cols[0], START_COL)          # grow, origin held
+        self.assertEqual(cols[1], START_COL + 1)      # release, heads right
+        # 5 -> 21 is 16 moves = 32 steps now that each move is a pair.
+        self.assertIn(21, cols[:40])                  # out to col_min + w
         self.assertIn(1, cols)                        # back to the left edge
         self.assertEqual(cols[-1], COLS - WIN + 1)    # then away to the right
 
     def test_band_zero_leading_edges_span_the_whole_width(self):
-        band0 = [s for s in self.steps if s.band == 0 and s.kind == sweep.KIND_TRAVEL]
+        band0 = [s for s in self.steps if s.band == 0 and s.axis == AXIS_COL]
         self.assertEqual({s.leading_edge for s in band0}, set(range(1, COLS + 1)))
 
     def test_bands_alternate_direction(self):
-        travel = [s for s in self.steps if s.kind == sweep.KIND_TRAVEL]
+        travel = [s for s in self.steps if s.axis == AXIS_COL]
         by_band = {}
         for s in travel:
             by_band.setdefault(s.band, []).append(s)
@@ -128,11 +151,12 @@ class TestSerpentine(unittest.TestCase):
         self.assertIn(COLS - WIN + 1, cols)
 
     def test_band_changes_are_row_moves(self):
-        changes = [s for s in self.steps if s.kind == sweep.KIND_BAND_CHANGE]
+        changes = [s for s in self.steps if s.axis == AXIS_ROW]
         self.assertTrue(all(s.axis == AXIS_ROW for s in changes))
         # Exactly one goes upward: the initial climb from the load row to row 1.
-        self.assertEqual(sum(1 for s in changes if s.direction == -1), 1)
-        self.assertTrue(all(s.direction == +1 for s in changes[1:]))
+        # The single upward climb is a grow+release pair, so two steps.
+        self.assertEqual(sum(1 for s in changes if s.direction == -1), 2)
+        self.assertTrue(all(s.direction == +1 for s in changes[2:]))
 
 
 class TestEdges(unittest.TestCase):
@@ -223,13 +247,13 @@ class TestVertical(unittest.TestCase):
         """Not a bug: the load position transposes to row 5, col 2, so the
         climb to the first band is 4 steps instead of 1."""
         vertical = sweep.plan_vertical(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
-        self.assertEqual(len(vertical), 907)
+        self.assertEqual(len(vertical), 1814)   # 907 moves x 2
 
     def test_both_axes_together_cost_roughly_double(self):
         h = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
         v = sweep.plan_vertical(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
         minutes = sweep.total_duration_s(h + v, 0.5) / 60.0
-        self.assertAlmostEqual(minutes, 15.07, delta=0.1)
+        self.assertAlmostEqual(minutes, 30.13, delta=0.3)
 
 
 if __name__ == "__main__":

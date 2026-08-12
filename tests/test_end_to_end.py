@@ -71,8 +71,8 @@ class TestHealthyChip(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_full_sweep_ran(self):
-        self.assertEqual(len(self.steps), 901)
-        self.assertEqual(self.rec.n_steps, 901)
+        self.assertEqual(len(self.steps), 1802)
+        self.assertEqual(self.rec.n_steps, 1802)
 
     def test_the_traversal_reaches_every_electrode(self):
         self.assertEqual(sweep.untested_electrodes(self.steps, ROWS, COLS), set())

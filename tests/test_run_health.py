@@ -264,7 +264,7 @@ class TestRegistrationGuard(unittest.TestCase):
         stats, be, rec, tmp = self._run(simulate.SyntheticRig())
         try:
             self.assertFalse(stats.get("aborted"))
-            self.assertEqual(stats["steps"], 901)
+            self.assertEqual(stats["steps"], 1802)
             self.assertEqual(stats["events"], 0)
         finally:
             tmp.cleanup()
@@ -411,7 +411,7 @@ class TestFrameSizeGuard(GateCase):
         finally:
             tmp.cleanup()
         self.assertFalse(stats.get("aborted"))
-        self.assertEqual(stats["steps"], 901)
+        self.assertEqual(stats["steps"], 1802)
 
     def test_no_expected_size_means_no_check(self):
         run, be, rec, prompter, tmp = self._build(
@@ -557,7 +557,7 @@ class TestVoltageGate(GateCase):
             logging.disable(logging.NOTSET)
             tmp.cleanup()
         self.assertFalse(stats.get("aborted"))
-        self.assertEqual(stats["steps"], 901)
+        self.assertEqual(stats["steps"], 1802)
 
     def test_mismatch_is_surfaced_to_the_operator_and_logged(self):
         run, be, rec, prompter, tmp = self._build([False])
@@ -822,7 +822,7 @@ class TestNoDropletCheck(GateCase):
         finally:
             tmp.cleanup()
         self.assertFalse(stats.get("aborted"))
-        self.assertEqual(stats["steps"], 901)
+        self.assertEqual(stats["steps"], 1802)
         self.assertTrue(any("UNVERIFIED" in n for n in notes), notes)
 
     def test_the_run_record_says_positions_were_not_confirmed(self):
@@ -962,7 +962,7 @@ class TestTopUpFollowsDropletCheck(GateCase):
         self.assertEqual(asked, [])
         self.assertFalse(any("Liquid low" in n for n in notes), notes)
         # >= because a static artifact flags blocks, so the fine pass adds steps
-        self.assertGreaterEqual(stats["steps"], 901)
+        self.assertGreaterEqual(stats["steps"], 1802)
 
     def test_the_skip_note_says_top_up_is_disabled_too(self):
         run, be, rec, prompter, tmp = self._build([True, True], rig=self.Tiny())
