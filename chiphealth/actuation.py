@@ -233,6 +233,11 @@ class FakeBackend:
         self.opened = False
         self.frame: list[Drop] = []
         self.calls: list[tuple[str, object]] = []
+        # A supply that does not reach what it was commanded. Set this to model
+        # the 2026-08-10 fault -- commanded (45,45,45), rails read (16,15,0) --
+        # which the default fake cannot represent, because SetVolt there simply
+        # stores what it was given and InquireVolt hands it straight back.
+        self.readback: list[int] | None = None
 
     def _record(self, name: str, payload: object = None) -> int:
         self.calls.append((name, payload))
@@ -261,6 +266,8 @@ class FakeBackend:
 
     def inquire_volt(self) -> tuple[int, list[int]]:
         self._record("InquireVolt")
+        if self.readback is not None:
+            return 1, list(self.readback)
         return 1, list(self.volts)
 
     def activate_elec(self, rows: int, cols: int, drops: Sequence[Drop]) -> int:
@@ -299,8 +306,9 @@ class ChipController:
     def __init__(self, backend: Backend, rows: int, cols: int,
                  volts: Sequence[int], armed: bool = False,
                  step_delay_s: float = 0.5, sleep=time.sleep,
-                 volt_tolerance: int = 2, volt_settle_s: float = 3.0,
-                 power_settle_s: float = 2.0) -> None:
+                 volt_tolerance: int = 2, volt_settle_s: float = 0.3,
+                 power_settle_s: float = 0.0,
+                 volt_poll_diagnostic: bool = False) -> None:
         self.backend = backend
         self.rows = rows
         self.cols = cols
@@ -311,11 +319,15 @@ class ChipController:
         self.volt_tolerance = int(volt_tolerance)
         self.volt_settle_s = float(volt_settle_s)
         self.power_settle_s = float(power_settle_s)
+        self.volt_poll_diagnostic = bool(volt_poll_diagnostic)
 
         self.frames_sent = 0
         self.frames_suppressed = 0
         self._open = False
         self.intended: list[list[tuple[int, int, int, int]]] = []
+        # The startup rail reading, taken once in open(). Cached because
+        # InquireVolt is a USB round-trip, not a getter -- see read_rails.
+        self._rails: tuple[int, list[int]] | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -328,10 +340,31 @@ class ChipController:
         return False
 
     def open(self) -> None:
-        """Init, open, power on, set and read back voltage.
+        """Init, open, power on, set voltage, read the rails back ONCE.
 
-        Adapted from chipsetup.py:27-53. The `input()` prompt after every call is
-        gone -- that is the §0.1 defect, not a feature.
+        This sequence deliberately copies ``csvvolcont.py:148-176`` call for
+        call, because that is the one legacy script that brings the supply up
+        with no human in the loop and it reliably reaches 45/45/45:
+
+            InitUSB() -> OpenUSB() -> SetPower(True) -> SetVolt(9 ints)
+            -> sleep(0.3) -> InquireVolt(9 int*)      <- exactly one call
+
+        The interactive scripts (chipsetup.py:26-55, cleanup.py, 1pixsplit.py,
+        dropsplitoff.py, mdmixing.py) issue the identical calls in the identical
+        order; they differ only in having an ``input()`` where the sleep is, so
+        their timing is however long the operator took and is not copyable.
+
+        **One InquireVolt, not fourteen.** Analysis §2 records that InquireVolt
+        issues a ``libusb_bulk_transfer`` and parses an 18-byte 0xAA-framed
+        response -- it is a USB round-trip, not a getter. Every working script
+        calls it once. An earlier version of this method polled it every 0.25 s
+        for up to 3 s and then read twice more, making up to 14 round-trips
+        during power-up. That reading is now taken once here and cached; the
+        polling survives as an opt-in diagnostic (``volt_poll_diagnostic``).
+
+        The `input()` prompt after every call is gone -- that is the §0.1
+        defect, not a feature. The prompt that was doing real work, the voltage
+        confirmation, is phase 0b in the orchestrator.
         """
         self.backend.init_usb()
         if not self.backend.open_usb():
@@ -342,55 +375,77 @@ class ChipController:
             # looked identical to a successful one.
             rc_power = self.backend.set_power(True)
             log.info("SetPower(True) -> rc=%s", rc_power)
-            # Wait BEFORE SetVolt, not only after. chipsetup.py has an input()
-            # here, so a human gave the supply seconds to come up before any
-            # voltage was commanded. Issuing the two back to back lands SetVolt
-            # mid-initialisation, which is what partial rails (16V, 15V, 0V
-            # against a commanded 45V) look like.
+            # csvvolcont.py issues SetVolt immediately after SetPower. Defaults
+            # to 0; configurable only so a genuinely slow supply can be given
+            # room without editing code.
             if self.power_settle_s > 0:
-                log.info("  waiting %.1fs for the supply to come up", self.power_settle_s)
+                log.info("  waiting %.2fs before SetVolt (non-default)",
+                         self.power_settle_s)
                 self._sleep(self.power_settle_s)
             rc_volt = self.backend.set_volt(self.volts)
             log.info("SetVolt%s -> rc=%s", tuple(self.volts), rc_volt)
-            # The supply needs a moment. The legacy scripts had an input()
-            # prompt between each of these calls, so a human was unknowingly
-            # providing seconds of settling time; issuing them back to back can
-            # read the rails before they have ramped.
-            self._settle_and_log()
+
+            if self.volt_poll_diagnostic:
+                self._poll_rails()
+            elif self.volt_settle_s > 0:
+                self._sleep(self.volt_settle_s)
         else:
             log.info("DRY-RUN: skipping SetPower(True) and SetVolt%s", tuple(self.volts))
+
         rc, rails = self.backend.inquire_volt()
+        self._rails = (rc, list(rails))
         log.info("InquireVolt rc=%s rails=%s (global rails, NOT per-electrode)", rc, rails)
 
-    def _settle_and_log(self) -> None:
-        """Poll the rails while they settle, logging each reading.
+    def _poll_rails(self) -> None:
+        """Opt-in only: watch the rails ramp, one InquireVolt per 0.25 s.
 
-        A single delayed read cannot tell a supply still ramping from one that
-        has stopped short. Polling shows which: rising values mean wait longer,
-        flat ones mean the rails are simply not reaching the commanded voltage.
+        OFF by default, because it diverges from the proven sequence -- see
+        :meth:`open`. Turn it on to diagnose a supply that is not reaching its
+        commanded voltage: rising readings mean it needs longer, flat ones mean
+        it has stopped short.
+
+        Unlike the version this replaces, it does **not** stop early on two
+        equal readings. Two consecutive zeros during ramp-up look exactly like
+        two consecutive readings of a settled supply, so that early exit cut
+        the wait to 0.5 s precisely in the case where more time was wanted.
         """
-        deadline_polls = max(1, int(self.volt_settle_s / 0.25)) if self.volt_settle_s else 1
-        previous = None
-        for i in range(deadline_polls):
+        polls = max(1, int(self.volt_settle_s / 0.25)) if self.volt_settle_s else 1
+        log.info("  volt poll diagnostic ON -- %d extra InquireVolt calls", polls)
+        for i in range(polls):
             self._sleep(0.25)
             rc, rails = self.backend.inquire_volt()
-            log.info("  settle poll %d/%d: rc=%s rails=%s", i + 1, deadline_polls,
-                     rc, rails)
-            if rails == previous and i > 0:
-                log.info("  rails stable after %.2fs", (i + 1) * 0.25)
-                return
-            previous = rails
-        log.info("  settle window ended after %.2fs", deadline_polls * 0.25)
+            log.info("  settle poll %d/%d: rc=%s rails=%s", i + 1, polls, rc, rails)
 
-    def verify_voltage(self) -> VoltageCheck:
-        """Read the rails back and compare them to what was commanded.
+    def read_rails(self, refresh: bool = False) -> tuple[int, list[int]]:
+        """The startup rail reading. Cached; does NOT hit the device again.
+
+        InquireVolt is a USB round-trip (analysis §2), and the legacy scripts
+        call it exactly once per power-up. :meth:`open` takes that one reading;
+        everything downstream reads it from here.
+
+        ``refresh=True`` forces a fresh round-trip. Use it when you genuinely
+        want to know the rails *now* -- after the operator has been asked to
+        check a connector, say -- not to re-confirm what open() already read.
+        """
+        if refresh or self._rails is None:
+            rc, rails = self.backend.inquire_volt()
+            self._rails = (rc, list(rails))
+        return self._rails
+
+    def verify_voltage(self, refresh: bool = False) -> VoltageCheck:
+        """Compare the startup rail reading against what was commanded.
 
         Previously this readback was logged and nothing looked at it, so a chip
         that powered up with a dead rail would sweep all 901 steps and report
         every electrode as failing. Now it is checked, and the orchestrator gates
         the run on an operator confirming it (phase 0b).
+
+        Uses the reading :meth:`open` already took rather than issuing another
+        InquireVolt, so a startup makes exactly one -- matching every legacy
+        script. Pass ``refresh=True`` to re-read after physically changing
+        something.
         """
-        rc, rails = self.backend.inquire_volt()
+        rc, rails = self.read_rails(refresh=refresh)
         measured = tuple(int(v) for v in rails)
         commanded = tuple(int(v) for v in self.volts)
 

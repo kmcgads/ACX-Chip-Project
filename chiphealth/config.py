@@ -35,7 +35,8 @@ class ChipConfig:
     # and the constant that converts electrode counts into real distance.
     #
     # RESOLVED 2026-08-10 by researcher measurement, closing the question
-    # deferred at spec/objectives.md §1.4 and §3.1:
+    # deferred at spec/objectives.md §1.4 and §2.1 (§2.1 was §3.1 before the
+    # 2026-08-12 priority renumbering):
     #
     #     active grid   31.55 mm square  (995.4025 mm^2)
     #     electrodes    128 x 128 = 16,384
@@ -69,15 +70,38 @@ class ChipConfig:
     # slop is normal, a rail reading 0 when 45 was commanded is not.
     volt_tolerance: int = 2
 
-    # Seconds to wait after SetVolt before reading the rails back. The legacy
-    # scripts had an input() prompt between the two, so a human supplied this
-    # delay without anyone noticing it mattered.
-    volt_settle_s: float = 3.0
+    # Seconds to wait after SetVolt before reading the rails back.
+    #
+    # 0.3 s copies csvvolcont.py:168 exactly -- the one legacy script that sets
+    # voltage with no human in the loop, and therefore the only proven timing
+    # this binding can actually match. The interactive scripts (chipsetup.py
+    # etc.) have an input() here instead, so their delay is however long the
+    # operator took and is not a number we can copy.
+    volt_settle_s: float = 0.3
 
-    # Seconds between SetPower and SetVolt. chipsetup.py has an input() prompt
-    # here; the legacy scripts reach 45V and this binding did not, and issuing
-    # the two calls back to back was the remaining structural difference.
-    power_settle_s: float = 2.0
+    # Seconds between SetPower and SetVolt. csvvolcont.py:158-166 issues them
+    # back to back with no delay, so the default is 0.
+    #
+    # This was 2.0 on the theory that chipsetup.py's input() prompt here was
+    # load-bearing. That was an assumption, not something any working script
+    # does, and csvvolcont reaches 45 V without it. Left configurable so a real
+    # supply-ramp problem can still be given time, but the default now matches
+    # the proven sequence.
+    power_settle_s: float = 0.0
+
+    # Poll InquireVolt repeatedly while the rails settle, instead of reading
+    # once. OFF by default and deliberately so.
+    #
+    # InquireVolt is not a passive getter: analysis §2 records that each call
+    # issues a libusb_bulk_transfer and parses an 18-byte 0xAA-framed response.
+    # Every legacy script calls it EXACTLY ONCE. Polling made up to 14 USB
+    # round-trips during power-up where the proven scripts make one, which is
+    # an unjustified divergence from the only known-good sequence.
+    #
+    # Turn it on when you want to watch a supply ramp -- it prints each reading
+    # and is the right tool for diagnosing a slow rail. Just do not leave it on
+    # for a measurement run.
+    volt_poll_diagnostic: bool = False
 
     def __post_init__(self) -> None:
         if len(self.volts) != 9:

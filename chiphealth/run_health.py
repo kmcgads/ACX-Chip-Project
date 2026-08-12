@@ -1124,6 +1124,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Where the previous run's corners are remembered "
                         "(default calibration.json).")
     p.add_argument("--backend", choices=("auto", "real", "fake"), default="auto")
+    p.add_argument("--volt-settle", type=float, default=None,
+                   help="Seconds between SetVolt and reading the rails back "
+                        "(default 0.3, copied from csvvolcont.py).")
+    p.add_argument("--volt-poll", action="store_true",
+                   help="DIAGNOSTIC: poll InquireVolt every 0.25s while the "
+                        "rails settle, instead of the single read the working "
+                        "legacy scripts do. Prints each reading, so use it to "
+                        "watch a supply that is not reaching 45V. Off by "
+                        "default -- it makes many extra USB round-trips.")
     p.add_argument("--step-delay", type=float, default=None,
                    help="Seconds between activations (default 0.5).")
     p.add_argument("--block", type=int, default=None, help="Fine block size.")
@@ -1179,6 +1188,9 @@ def main(argv=None) -> int:
     cfg.armed = cfg.armed or args.arm
     cfg.backend = args.backend
     cfg.headless = args.headless
+    cfg.chip.volt_poll_diagnostic = args.volt_poll
+    if args.volt_settle is not None:
+        cfg.chip.volt_settle_s = args.volt_settle
     if args.step_delay is not None:
         cfg.sweep.step_delay_s = args.step_delay
     if args.block is not None:
@@ -1204,7 +1216,8 @@ def main(argv=None) -> int:
                           armed=cfg.armed, step_delay_s=cfg.sweep.step_delay_s,
                           volt_tolerance=cfg.chip.volt_tolerance,
                           volt_settle_s=cfg.chip.volt_settle_s,
-                          power_settle_s=cfg.chip.power_settle_s)
+                          power_settle_s=cfg.chip.power_settle_s,
+                          volt_poll_diagnostic=cfg.chip.volt_poll_diagnostic)
 
     cli_corners = parse_corners(args.corners)
     if cli_corners:
