@@ -76,6 +76,37 @@ class Step:
         return d
 
 
+def grow_release(idx: int, row: int, col: int, h: int, w: int, axis: str,
+                 direction: int, kind: str, band: int) -> tuple[Step, Step]:
+    """The two commanded frames that advance a window by one electrode.
+
+    Grow first, holding every already-energised cell; release the trailing edge
+    only afterwards. Commanding the new position in one call instead asks the
+    droplet to let go behind and grab ahead in the same instant, and the liquid
+    cannot reflow that fast.
+
+    ``kind`` labels the grow frame -- ``KIND_GROW`` on the coarse sweep,
+    ``KIND_TRANSPORT`` on the fine pass -- so the timeline still records which
+    pass a frame came from. The trailing frame is always ``KIND_RELEASE``, which
+    is what tells the detector and the simulator not to score it.
+
+    Growing backwards (leftward or upward) moves the origin back one and widens,
+    which extends the same leading edge rather than a new one.
+    """
+    d = direction
+    if axis == AXIS_COL:
+        grow = Step(idx=idx, row=row, col=col if d > 0 else col - 1,
+                    h=h, w=w + 1, axis=axis, direction=d, kind=kind, band=band)
+        release = Step(idx=idx + 1, row=row, col=col + d, h=h, w=w,
+                       axis=axis, direction=d, kind=KIND_RELEASE, band=band)
+    else:
+        grow = Step(idx=idx, row=row if d > 0 else row - 1, col=col,
+                    h=h + 1, w=w, axis=axis, direction=d, kind=kind, band=band)
+        release = Step(idx=idx + 1, row=row + d, col=col, h=h, w=w,
+                       axis=axis, direction=d, kind=KIND_RELEASE, band=band)
+    return grow, release
+
+
 def plan_bands(chip_rows: int, window_h: int, first_row: int = 1) -> list[int]:
     """Top rows of each horizontal band.
 
@@ -192,35 +223,27 @@ def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int
     row, col = start_row, start_col
     idx = 0
 
-    def emit(r: int, c: int, h: int, w: int, axis: str, direction: int,
-             kind: str, band: int) -> None:
+    def emit_pair(r: int, c: int, axis: str, direction: int, band: int) -> None:
         nonlocal idx
-        steps.append(Step(idx=idx, row=r, col=c, h=h, w=w,
-                          axis=axis, direction=direction, kind=kind, band=band))
-        idx += 1
+        steps.extend(grow_release(idx, r, c, window_h, window_w,
+                                  axis, direction, KIND_GROW, band))
+        idx += 2
 
     def walk_cols(target: int, band: int) -> None:
         """One electrode of travel = grow, then release."""
         nonlocal col
         while col != target:
             d = 1 if target > col else -1
-            # Grow: widen by one into the direction of travel. Leftward, the
-            # origin moves back one and the width grows, which extends the same
-            # leading edge.
-            emit(row, col if d > 0 else col - 1, window_h, window_w + 1,
-                 AXIS_COL, d, KIND_GROW, band)
+            emit_pair(row, col, AXIS_COL, d, band)
             col += d
-            emit(row, col, window_h, window_w, AXIS_COL, d, KIND_RELEASE, band)
 
     for band_i, top in enumerate(tops):
         # Walk into the band, one row at a time. This may go UP: the droplet is
         # loaded at row 2 but band 0 starts at row 1.
         while row != top:
             d = 1 if top > row else -1
-            emit(row if d > 0 else row - 1, col, window_h + 1, window_w,
-                 AXIS_ROW, d, KIND_GROW, band_i)
+            emit_pair(row, col, AXIS_ROW, d, band_i)
             row += d
-            emit(row, col, window_h, window_w, AXIS_ROW, d, KIND_RELEASE, band_i)
 
         if band_i == 0 and prime:
             for target in (min(col_min + window_w, col_max), col_min, col_max):

@@ -951,24 +951,33 @@ class HealthRun:
         return frame[y0:int(y) + half_y, x0:int(x) + half_x]
 
     def _walk(self, frm, to, h, w, kind):
-        """Steps translating a window from `frm` to `to`, one electrode at a time."""
+        """Frames translating a window from `frm` to `to`, one electrode at a time.
+
+        Each electrode of travel is a grow/release PAIR, the same discipline the
+        coarse sweep uses -- see sweep.grow_release. Moving the window in a
+        single call asks the liquid to release behind and grab ahead at once,
+        and on hardware 2026-08-10 it necked and split mid-transport. The fine
+        pass runs on a probe droplet a fraction of the parent's volume, so it
+        has even less to spare than the sweep did.
+
+        Two frames per move, so ``len(steps)`` is twice the distance travelled;
+        callers wanting distance want :meth:`_transport_to`'s ``moves``.
+        """
         steps = []
         row, col = int(frm[0]), int(frm[1])
         idx = 0
         while col != int(to[1]):
             d = 1 if int(to[1]) > col else -1
+            steps.extend(sweep.grow_release(idx, row, col, h, w,
+                                            sweep.AXIS_COL, d, kind, band=-1))
             col += d
-            steps.append(sweep.Step(idx=idx, row=row, col=col, h=h, w=w,
-                                    axis=sweep.AXIS_COL, direction=d,
-                                    kind=kind, band=-1))
-            idx += 1
+            idx += 2
         while row != int(to[0]):
             d = 1 if int(to[0]) > row else -1
+            steps.extend(sweep.grow_release(idx, row, col, h, w,
+                                            sweep.AXIS_ROW, d, kind, band=-1))
             row += d
-            steps.append(sweep.Step(idx=idx, row=row, col=col, h=h, w=w,
-                                    axis=sweep.AXIS_ROW, direction=d,
-                                    kind=kind, band=-1))
-            idx += 1
+            idx += 2
         return steps
 
     def _clamp_origin(self, rc, h, w):
@@ -983,9 +992,15 @@ class HealthRun:
             (float(self.pos[0]), float(self.pos[1])),
             (float(dest[0]), float(dest[1])), self.cfg.sweep.fine_travel_slack)
         steps = self._walk(self.pos, dest, h, w, sweep.KIND_TRANSPORT)
+        # Budget is in electrode MOVES, not commanded frames. _walk emits two
+        # frames per move, so comparing len(steps) here would silently halve
+        # fine_travel_slack -- and it would double the `spent`/`budget` numbers
+        # recorded in every `unreachable` event, making them incomparable with
+        # runs recorded before transport became a grow/release pair.
+        moves = len(steps) // 2
         self._last_transport_budget = budget
-        self._last_transport_spent = len(steps)
-        if len(steps) > budget:
+        self._last_transport_spent = moves
+        if moves > budget:
             return False
         for step in steps:
             if not self._drive(step):
@@ -1039,7 +1054,11 @@ class HealthRun:
                 Drop(s.window_h, s.window_w, row, col),
                 Drop(ph, pw, row, probe_col),
             ])
-            # Walk the probe clear of the parent.
+            # Walk the probe clear of the parent. NOT caterpillar: this is
+            # dropsplitoff.py's proven walk-clear, and the split is the most
+            # failure-prone step in the run, so it is not being changed without
+            # rig evidence. It does carry the same grab/release hazard _walk
+            # had -- revisit if the probe is seen splitting here on hardware.
             for off in range(1, walk + 1):
                 self.chip.activate([
                     Drop(s.window_h, s.window_w, row, col),
