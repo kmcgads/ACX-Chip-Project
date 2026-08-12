@@ -561,11 +561,16 @@ class TestVoltageGate(GateCase):
 
     def test_mismatch_is_surfaced_to_the_operator_and_logged(self):
         run, be, rec, prompter, tmp = self._build([False])
-        be.volts = [45, 0, 45, 0, 0, 0, 0, 0, 0]
+        # `readback`, not `volts`: SetVolt stores what it is given, so the only
+        # way to model a supply that does not reach its commanded voltage --
+        # the actual 2026-08-10 fault -- is to override what InquireVolt
+        # returns. It must be set before phase 0 opens the chip, because the
+        # rails are now read once at startup and that reading is what the gate
+        # judges.
+        be.readback = [45, 0, 45, 0, 0, 0, 0, 0, 0]
         logging.disable(logging.CRITICAL)
         try:
             run.phase0_preflight()
-            be.volts = [45, 0, 45, 0, 0, 0, 0, 0, 0]
             ok = run.phase0b_voltage()
             meta_notes = rec.notes
         finally:

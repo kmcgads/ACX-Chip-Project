@@ -10,7 +10,7 @@ import unittest
 
 from chiphealth.actuation import (ArmingError, ChipController, ChipError, Drop,
                                   FakeBackend, N_RAILS, REQUIRED_EXPORTS,
-                                  make_backend)
+                                  RealBackend, make_backend)
 
 ROWS = COLS = 128
 VOLTS = (45, 45, 45, 0, 0, 0, 0, 0, 0)
@@ -186,9 +186,9 @@ class TestVoltageVerification(unittest.TestCase):
 
     def test_dead_rail_is_caught_and_named(self):
         be = FakeBackend(rows=ROWS, cols=COLS)
+        be.readback = [45, 0, 45, 0, 0, 0, 0, 0, 0]  # rail 2 dropped out
         chip = controller(armed=True, backend=be)
         chip.open()
-        be.volts = [45, 0, 45, 0, 0, 0, 0, 0, 0]  # rail 2 dropped out
         check = chip.verify_voltage()
         self.assertFalse(check.ok)
         self.assertEqual(len(check.mismatches), 1)
@@ -197,19 +197,30 @@ class TestVoltageVerification(unittest.TestCase):
         self.assertIn("rail 2", check.summary())
         self.assertIn("VOLTAGE MISMATCH", check.summary())
 
-    def test_small_drift_is_tolerated(self):
+    def test_the_2026_08_10_fault_is_caught_at_startup(self):
+        """The real one: commanded 45/45/45, rails read 16/15/0."""
         be = FakeBackend(rows=ROWS, cols=COLS)
+        be.readback = [16, 15, 0, 0, 0, 0, 0, 0, 0]
         chip = controller(armed=True, backend=be)
         chip.open()
-        be.volts = [44, 46, 45, 0, 0, 0, 0, 0, 0]
+        check = chip.verify_voltage()
+        self.assertFalse(check.ok)
+        self.assertEqual([m[0] for m in check.mismatches], [0, 1, 2])
+        self.assertIn("rail 3: commanded 45V, reads 0V", check.summary())
+
+    def test_small_drift_is_tolerated(self):
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        be.readback = [44, 46, 45, 0, 0, 0, 0, 0, 0]
+        chip = controller(armed=True, backend=be)
+        chip.open()
         self.assertTrue(chip.verify_voltage().ok)
 
     def test_tolerance_is_configurable(self):
         be = FakeBackend(rows=ROWS, cols=COLS)
+        be.readback = [44, 45, 45, 0, 0, 0, 0, 0, 0]
         chip = ChipController(be, ROWS, COLS, VOLTS, armed=True, step_delay_s=0.0,
                               sleep=lambda _s: None, volt_tolerance=0)
         chip.open()
-        be.volts = [44, 45, 45, 0, 0, 0, 0, 0, 0]
         self.assertFalse(chip.verify_voltage().ok)
 
     def test_dry_run_is_not_reported_as_a_mismatch(self):
@@ -222,6 +233,173 @@ class TestVoltageVerification(unittest.TestCase):
         self.assertTrue(check.ok)
         self.assertIn("DRY-RUN", check.summary())
         self.assertIn("--arm", check.summary())
+
+    def test_a_refresh_re_reads_the_device(self):
+        """The cache is for not spamming the bus, not for hiding a change the
+        operator just made to a connector."""
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        chip = controller(armed=True, backend=be)
+        chip.open()
+        self.assertTrue(chip.verify_voltage().ok)
+        be.readback = [45, 45, 0, 0, 0, 0, 0, 0, 0]   # rail 3 drops out
+        self.assertTrue(chip.verify_voltage().ok, "cached read should not change")
+        check = chip.verify_voltage(refresh=True)
+        self.assertFalse(check.ok)
+        self.assertIn("rail 3", check.summary())
+
+
+class TestVoltageSequenceMatchesLegacy(unittest.TestCase):
+    """The startup sequence must match the proven legacy scripts call for call.
+
+    csvvolcont.py:148-176 is the reference: it is the only legacy script that
+    brings the supply up with no human in the loop, and it reaches 45/45/45.
+    The interactive scripts issue the identical calls in the identical order.
+    """
+
+    def calls(self, **kw):
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        chip = controller(armed=True, backend=be, **kw)
+        chip.open()
+        chip.verify_voltage()
+        return be, [n for n, _ in be.calls]
+
+    def test_call_order_matches_csvvolcont(self):
+        _, names = self.calls()
+        self.assertEqual(names, ["InitUSB", "OpenUSB", "SetPower", "SetVolt",
+                                 "InquireVolt"])
+
+    def test_inquire_volt_is_called_exactly_once(self):
+        """Every legacy script calls it once. It is a libusb bulk transfer
+        (analysis §2), not a getter -- an earlier version made up to 14 USB
+        round-trips during power-up."""
+        _, names = self.calls()
+        self.assertEqual(names.count("InquireVolt"), 1)
+
+    def test_all_nine_rails_reach_the_backend_in_order(self):
+        be, _ = self.calls()
+        volts = next(a for n, a in be.calls if n == "SetVolt")
+        self.assertEqual(list(volts), [45, 45, 45, 0, 0, 0, 0, 0, 0])
+
+    def test_rail_three_is_commanded_like_the_other_two(self):
+        """No legacy script treats rail 3 specially; neither may we.
+
+        chipsetup.py:41, 1pixsplit.py:134, dropsplitoff.py:43, mdmixing.py:192
+        and mdmixwithmerge.py:307 all pass a literal 45 in the third position;
+        cleanup.py:66 sets VOLT_3 = 45. Rail 3 is the one that read 0 V on every
+        armed attempt on 2026-08-10, so this pins that we command it normally.
+        """
+        be, _ = self.calls()
+        volts = next(a for n, a in be.calls if n == "SetVolt")
+        self.assertEqual(volts[0], volts[1])
+        self.assertEqual(volts[1], volts[2])
+
+
+class TestRealBackendMarshalling(unittest.TestCase):
+    """How RealBackend actually calls the DLL, with a stub in place of it.
+
+    The fake backend cannot catch a marshalling regression -- it receives a
+    Python sequence, not whatever ctypes would put on the stack. These build a
+    RealBackend without loading a DLL and inspect the arguments it constructs.
+    """
+
+    class StubLib:
+        def __init__(self):
+            self.calls = []
+
+            def rec(name):
+                def f(*a):
+                    self.calls.append((name, a))
+                    return 1
+                f.restype = None
+                return f
+            for n in REQUIRED_EXPORTS:
+                setattr(self, n, rec(n))
+
+    def backend(self):
+        rb = RealBackend.__new__(RealBackend)        # skip the CDLL load
+        rb.dll_path = "<stub>"
+        rb.lib = self.StubLib()
+        return rb
+
+    def test_set_volt_sends_nine_plain_python_ints(self):
+        """chipsetup.py:41 passes 45,45,45,0,0,0,0,0,0 positionally with no
+        argtypes declared, so ctypes marshals each as a C int. Wrapping them in
+        anything else, or passing an array, changes what lands on the stack."""
+        rb = self.backend()
+        rb.set_volt((45, 45, 45, 0, 0, 0, 0, 0, 0))
+        name, args = rb.lib.calls[-1]
+        self.assertEqual(name, "SetVolt")
+        self.assertEqual(len(args), 9, "SetVolt takes 9 separate args, not an array")
+        self.assertEqual(list(args), [45, 45, 45, 0, 0, 0, 0, 0, 0])
+        for v in args:
+            self.assertIs(type(v), int, f"expected a plain int, got {type(v)}")
+
+    def test_set_power_sends_an_int_not_a_c_bool(self):
+        """An earlier version pinned SetPower as c_bool, sending one byte where
+        the working scripts send four. chipsetup.py:37 passes True with no
+        argtypes, which ctypes marshals as a 4-byte C int."""
+        rb = self.backend()
+        rb.set_power(True)
+        _, args = rb.lib.calls[-1]
+        self.assertEqual(len(args), 1)
+        self.assertIs(type(args[0]), int)
+        self.assertEqual(args[0], 1)
+
+    def test_inquire_volt_sends_nine_separate_pointers(self):
+        """analysis §2: 9 output int* pointers, matching the legacy
+        InquireVolt(byref(v1)...byref(v9)) -- not one pointer to an array."""
+        rb = self.backend()
+        rb.inquire_volt()
+        name, args = rb.lib.calls[-1]
+        self.assertEqual(name, "InquireVolt")
+        self.assertEqual(len(args), 9)
+        # byref() yields a CArgObject, not a _Pointer. What matters is that
+        # there are nine of them and none is a bare int.
+        for a in args:
+            self.assertNotIsInstance(a, int)
+            self.assertEqual(type(a).__name__, "CArgObject")
+
+
+class TestVoltageDiagnosticFlag(unittest.TestCase):
+
+    def names(self, **kw):
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        chip = controller(armed=True, backend=be, **kw)
+        chip.open()
+        chip.verify_voltage()
+        return be, [n for n, _ in be.calls]
+
+    def test_off_by_default(self):
+        _, names = self.names()
+        self.assertEqual(names.count("InquireVolt"), 1)
+
+    def test_can_be_turned_on(self):
+        _, names = self.names(volt_poll_diagnostic=True)
+        self.assertGreater(names.count("InquireVolt"), 1,
+                           "diagnostic mode should poll")
+
+    def test_no_delay_between_set_power_and_set_volt_by_default(self):
+        slept = []
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        chip = ChipController(be, ROWS, COLS, VOLTS, armed=True, step_delay_s=0.0,
+                              sleep=slept.append)
+        chip.open()
+        # csvvolcont issues them back to back; the only sleep is the post-SetVolt
+        # settle, and it is 0.3s.
+        self.assertEqual(slept, [0.3])
+
+    def test_the_poll_does_not_stop_early_on_equal_readings(self):
+        """Two consecutive zeros during ramp-up look exactly like two readings
+        of a settled supply. The old early-exit cut the wait to 0.5s precisely
+        when more time was wanted."""
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        be.readback = [0] * 9                  # never ramps
+        chip = ChipController(be, ROWS, COLS, VOLTS, armed=True, step_delay_s=0.0,
+                              sleep=lambda _s: None, volt_settle_s=1.0,
+                              volt_poll_diagnostic=True)
+        chip.open()
+        polls = [n for n, _ in be.calls].count("InquireVolt")
+        self.assertEqual(polls, int(1.0 / 0.25) + 1)   # 4 polls + the one read
 
 
 class TestValidation(unittest.TestCase):
