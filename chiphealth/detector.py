@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 
 from . import DETECTOR_VERSION
-from .sweep import AXIS_COL, Step, block_of, leading_edge_blocks
+from .sweep import AXIS_COL, KIND_RELEASE, Step, block_of, leading_edge_blocks
 
 KIND_DRAG = "drag"
 KIND_NO_MOVEMENT = "no_movement"
@@ -158,6 +158,16 @@ class Detector:
         primary = obs.primary()
 
         self._advance_swept(step)
+
+        if step.kind == KIND_RELEASE:
+            # A release drops the trailing edge and energises nothing new, so
+            # there is no leading edge to measure and nothing was tested. It
+            # also lands immediately after the grow, before the liquid has had
+            # a step to reflow -- judging residue here would flag liquid that
+            # is simply still moving. Recorded, not scored.
+            if primary is not None:
+                result.primary_area = primary.area_electrodes
+            return result
 
         if primary is None:
             # Nothing visible at all. Not a per-electrode verdict -- could be a

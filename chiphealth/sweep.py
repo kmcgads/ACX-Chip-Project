@@ -25,7 +25,18 @@ from dataclasses import dataclass, asdict
 AXIS_COL = "col"
 AXIS_ROW = "row"
 
-KIND_TRAVEL = "travel"        # sweeping along a band
+KIND_TRAVEL = "travel"        # sweeping along a band (legacy single-step form)
+# A one-electrode move is emitted as a PAIR. Commanding the new position in one
+# call asks the droplet to release behind and grab ahead in the same instant,
+# and the liquid cannot reflow that fast -- on hardware 2026-08-10 it necked and
+# split mid-transport. Every working script avoids this: mdmixing.py grows the
+# region (width 20 -> 35) before anything releases, and cleanup.py only ever
+# shrinks a corner-anchored region, never translating at all.
+#
+# Splitting during transport also manufactures the exact `residue` signature the
+# detector exists to find, so this is a correctness issue, not just droplet care.
+KIND_GROW = "grow"            # extend into new territory; nothing released
+KIND_RELEASE = "release"      # drop the trailing edge; nothing new energised
 KIND_BAND_CHANGE = "band"     # moving down to the next band
 KIND_TRANSPORT = "transport"  # fine pass: driving liquid to a target
 KIND_PROBE = "probe"          # fine pass: testing a block
@@ -181,26 +192,35 @@ def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int
     row, col = start_row, start_col
     idx = 0
 
-    def emit(r: int, c: int, axis: str, direction: int, kind: str, band: int) -> None:
+    def emit(r: int, c: int, h: int, w: int, axis: str, direction: int,
+             kind: str, band: int) -> None:
         nonlocal idx
-        steps.append(Step(idx=idx, row=r, col=c, h=window_h, w=window_w,
+        steps.append(Step(idx=idx, row=r, col=c, h=h, w=w,
                           axis=axis, direction=direction, kind=kind, band=band))
         idx += 1
 
     def walk_cols(target: int, band: int) -> None:
+        """One electrode of travel = grow, then release."""
         nonlocal col
         while col != target:
             d = 1 if target > col else -1
+            # Grow: widen by one into the direction of travel. Leftward, the
+            # origin moves back one and the width grows, which extends the same
+            # leading edge.
+            emit(row, col if d > 0 else col - 1, window_h, window_w + 1,
+                 AXIS_COL, d, KIND_GROW, band)
             col += d
-            emit(row, col, AXIS_COL, d, KIND_TRAVEL, band)
+            emit(row, col, window_h, window_w, AXIS_COL, d, KIND_RELEASE, band)
 
     for band_i, top in enumerate(tops):
         # Walk into the band, one row at a time. This may go UP: the droplet is
         # loaded at row 2 but band 0 starts at row 1.
         while row != top:
             d = 1 if top > row else -1
+            emit(row if d > 0 else row - 1, col, window_h + 1, window_w,
+                 AXIS_ROW, d, KIND_GROW, band_i)
             row += d
-            emit(row, col, AXIS_ROW, d, KIND_BAND_CHANGE, band_i)
+            emit(row, col, window_h, window_w, AXIS_ROW, d, KIND_RELEASE, band_i)
 
         if band_i == 0 and prime:
             for target in (min(col_min + window_w, col_max), col_min, col_max):

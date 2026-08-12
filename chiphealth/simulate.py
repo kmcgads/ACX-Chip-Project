@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .detector import Blob, Observation
-from .sweep import AXIS_COL, Step
+from .sweep import AXIS_COL, KIND_RELEASE, Step
 
 
 @dataclass
@@ -55,6 +55,20 @@ class SyntheticRig:
 
     def observe(self, step: Step, frame_index: int, t: float) -> Observation:
         """What the camera would see at this commanded step."""
+        if step.kind == KIND_RELEASE:
+            # A release only drops the trailing edge; the droplet is not asked
+            # to enter anywhere new, so its lag cannot change. Evaluating the
+            # frontier here also breaks the model: the frontier is derived as
+            # leading_edge - direction*lag, which assumes the leading edge
+            # advances every step. Under grow/release it advances every other
+            # step, so once lag reached 1 the frontier slid back onto a live
+            # cell and unblocked itself -- lag oscillated 0<->1 and no fault was
+            # ever detected.
+            blobs = [self._primary(step)]
+            blobs.extend(self._residue_blobs())
+            return Observation(step_idx=step.idx, frame_index=frame_index, t=t,
+                               blobs=tuple(blobs))
+
         blocking = self._frontier_blockers(step)
 
         if blocking:
