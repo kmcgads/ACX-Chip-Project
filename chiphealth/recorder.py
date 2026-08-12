@@ -29,11 +29,67 @@ from __future__ import annotations
 
 import json
 import random
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import DETECTOR_VERSION, SCHEMA_VERSION
 from .sweep import block_bounds, block_grid_shape
+
+
+def code_version() -> dict:
+    """Which code produced this run. Best effort, and honest when it cannot tell.
+
+    ``schema_version`` and ``detector_version`` are coarse: they only change
+    when someone remembers to change them. The git commit is exact, and this
+    artifact's whole purpose is being read months later -- at which point
+    "which code produced this?" has no other answer.
+
+    **``dirty`` matters as much as the hash.** A commit identifies the code only
+    if the working tree was clean; with uncommitted edits the SHA names the code
+    the run did *not* use. Recording the hash alone would be worse than
+    recording nothing, because it looks authoritative.
+
+    Never raises and never silently omits: git missing, not a repository, or a
+    timeout all record ``commit: None`` with the reason, so the artifact says
+    "unknown" rather than leaving a reader to assume it was simply not captured.
+    """
+    root = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str | None:
+        try:
+            r = subprocess.run(("git", "-C", str(root)) + args,
+                               capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        # rstrip("\n") only. A bare .strip() eats the leading space of
+        # `git status --porcelain`'s first line -- its format is a two-column
+        # status field then a space -- which silently corrupted the first path.
+        return r.stdout.rstrip("\n") if r.returncode == 0 else None
+
+    commit = git("rev-parse", "HEAD")
+    if commit is None:
+        return {"commit": None, "dirty": None,
+                "note": "no git commit available -- git missing, not a "
+                        "repository, or the command failed"}
+    commit = commit.strip()
+    status = git("status", "--porcelain")
+    if status is None:
+        return {"commit": commit, "dirty": None,
+                "note": "commit read but working-tree state unknown, so this "
+                        "hash may not be the code that ran"}
+    lines = [ln for ln in status.splitlines() if ln.strip()]
+    out = {"commit": commit, "dirty": bool(lines)}
+    if lines:
+        out["note"] = ("UNCOMMITTED CHANGES were present, so this commit does "
+                       "NOT identify the code that ran")
+        # Whole porcelain lines, status column included, so a reader can tell a
+        # modified tracked file (" M path") from untracked noise ("?? path").
+        # Not sliced: the paths are the point, but so is which kind of change.
+        out["dirty_files"] = sorted(lines)[:50]
+        if len(lines) > 50:
+            out["dirty_files_truncated"] = len(lines) - 50
+    return out
 
 # Verdicts, worst-wins. "unknown" is a first-class outcome, not a synonym for
 # "fine" -- a region never covered by liquid was never tested, and reporting it
@@ -177,6 +233,7 @@ class RunRecorder:
             "chip_id": self.chip_id,
             "schema_version": SCHEMA_VERSION,
             "detector_version": DETECTOR_VERSION,
+            "code_version": code_version(),
             "rng_seed": self.rng_seed,
             "config": self.cfg.to_dict(),
         }

@@ -236,9 +236,10 @@ def check_registration(observed_centroid_rc: tuple[float, float],
     """Validate the coordinate frame against the known initial droplet.
 
     The operator loads a droplet of known size at a known position (20x20 at
-    row 2, col 5), so the mapping can be checked for free before anything is
-    energised. A silently wrong coordinate frame would poison every verdict in
-    the run, and this is the cheapest guard against it
+    ``SweepConfig.start_row`` / ``start_col``, currently row 5, col 10), so the
+    mapping can be checked for free before anything is energised. A silently
+    wrong coordinate frame would poison every verdict in the run, and this is
+    the cheapest guard against it
     (spec/p1_chip_health_design.md §2, phase 2).
     """
     exp_centre = (expected_row + expected_h / 2.0 - 0.5,

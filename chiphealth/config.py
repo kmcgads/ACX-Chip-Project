@@ -112,10 +112,20 @@ class ChipConfig:
 class SweepConfig:
     """Coarse-pass geometry (spec/p1_chip_health_design.md §2, phase 4)."""
 
-    # The operator-loaded starting droplet: 20x20 at row 2, col 5.
-    # Researcher-specified, 2026-08-06.
-    start_row: int = 2
-    start_col: int = 5
+    # The operator-loaded starting droplet: 20x20 at row 5, col 10.
+    #
+    # Moved from (2, 5) on 2026-08-12: the old position sat the droplet's edge
+    # against the outer electrodes, which is not where you want to be loading by
+    # hand. This is the ONLY place the load position is defined -- the load
+    # prompt, the registration check, the resting frame and the traversal plan
+    # all read it from here, so moving it moves all of them together.
+    #
+    # It is not free: the sweep still starts every band at row 1
+    # (`first_band_row`), so the window now walks up four rows instead of one
+    # before band 0 begins. Coverage stays complete -- verified every run by
+    # sweep.untested_electrodes.
+    start_row: int = 5
+    start_col: int = 10
     window_h: int = 20
     window_w: int = 20
 
@@ -139,7 +149,25 @@ class SweepConfig:
     # now two activations (grow, then release), so at this delay the liquid gets
     # 1.0s per electrode of travel where the legacy scripts give it 0.5s. See
     # armed_min_step_delay_s.
+    #
+    # This is the ARMED default. Dry runs use dry_run_step_delay_s instead.
     step_delay_s: float = 0.5
+
+    # What a DRY run waits between activations. Zero, and deliberately.
+    #
+    # The delay exists for one reason: to give liquid time to reflow before the
+    # next frame. A dry run energises nothing -- ChipController.activate never
+    # calls ActivateElec when disarmed, and open() skips SetPower/SetVolt -- so
+    # there is no liquid, nothing moves, and nothing needs time. Charging a dry
+    # run 0.5s per frame turned a plumbing check into a 15-minute wait for no
+    # physical reason.
+    #
+    # At 1798 frames that is ~15 min saved; a dry run with a real camera is then
+    # bound by the camera (~1.5 min) rather than by an artificial sleep. An
+    # explicit --step-delay always wins, and the value actually used is logged
+    # and recorded in run.json, so a run is never silently timed differently
+    # from what its operator expected.
+    dry_run_step_delay_s: float = 0.0
 
     # Floor on step_delay_s for an ARMED run. Below this the run refuses to
     # start unless explicitly overridden.
@@ -180,7 +208,7 @@ class SweepConfig:
 
     # Where the first band begins -- NOT where the droplet is loaded. Keeping
     # these separate is what lets row 1 be swept even though the operator loads
-    # at row 2. Set to `start_row` to reproduce the old, incomplete coverage.
+    # at row 5. Set to `start_row` to reproduce the old, incomplete coverage.
     first_band_row: int = 1
 
     # Give band 0 the corner turn the other bands get for free from their band

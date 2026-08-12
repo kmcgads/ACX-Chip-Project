@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -33,7 +34,7 @@ from pathlib import Path
 from . import DETECTOR_VERSION, SCHEMA_VERSION
 from . import calibration, simulate, sweep
 from .actuation import ChipController, Drop, make_backend
-from .config import RunConfig, from_env
+from .config import RunConfig, SweepConfig, from_env
 from .detector import Detector, Observation
 from .geometry import ElectrodeFrame, check_registration
 from .recorder import DEGRADED, FAIL, RunRecorder
@@ -392,14 +393,29 @@ class HealthRun:
                         "actual_frame_size": getattr(self.source, "frame_size", None)})
         self.chip.open()
         if not self.cfg.armed:
-            log.warning("DRY-RUN: no electrode will be energised. Pass --arm for "
-                        "a live run.")
+            # Say this in the artifact, not only on the console. A dry run
+            # still drives the camera and the detector, so it still produces a
+            # coverage map -- and that map is meaningless, because nothing was
+            # energised and therefore nothing could move. Every step commands a
+            # window that marches away from a stationary droplet, which is the
+            # textbook drag / no_movement / residue signature. Without this note
+            # the run folder is indistinguishable from a real measurement
+            # reporting a badly degraded chip.
+            msg = ("DRY-RUN: no electrode was energised, so nothing could move. "
+                   "The coverage map and every event in this run are ARTEFACTS "
+                   "OF NOT ENERGISING, not measurements of the chip -- a "
+                   "stationary droplet under a moving commanded window produces "
+                   "drag, no_movement and residue by construction. Use this run "
+                   "to check the camera, corner-picking and detector plumbing "
+                   "only. Pass --arm for a run whose verdicts mean anything.")
+            log.warning(msg)
+            self.rec.note(msg)
 
     def phase0b_voltage(self) -> bool:
         """Confirm the voltage connection before anything depends on it.
 
         A gate, not a log line. If a rail is dead the run would otherwise sweep
-        all 901 steps and report the whole chip as failing -- an expensive way
+        all 899 moves and report the whole chip as failing -- an expensive way
         to discover a loose connector, and a misleading result to have sitting
         in the longitudinal record.
         """
@@ -855,14 +871,14 @@ class HealthRun:
             targets, _ = self.phase5_triage()
             self.phase6_fine(targets)
             return self.phase7_shutdown()
-        except BaseException:
+        except BaseException as exc:
             # De-energise on every exit path, including Ctrl-C.
             log.exception("Run failed -- de-energising.")
             try:
                 self.chip.close()
                 self.source.close()
                 self.view.close()
-                self.rec.note("Run ended with an exception; chip de-energised.")
+                self.rec.note(describe_exception(exc))
                 self.rec.finalize({"aborted": True})
             finally:
                 raise
@@ -1149,12 +1165,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "watch a supply that is not reaching 45V. Off by "
                         "default -- it makes many extra USB round-trips.")
     p.add_argument("--step-delay", type=float, default=None,
-                   help="Seconds between activations (default 0.5). DRY RUNS "
-                        "can use 0 safely -- nothing is energised and there is "
-                        "no liquid, so the whole sweep takes about as long as "
-                        "the camera needs. ARMED runs are floored at 0.25s "
-                        "(see --allow-fast-armed) and 0.5 is the only value "
-                        "with hardware behind it.")
+                   help="Seconds between activations. Defaults to 0 for a DRY "
+                        "run (nothing is energised, so no reflow time is "
+                        "needed -- the sweep is then camera-bound, ~1.5 min) "
+                        "and 0.5 when ARMED. Armed runs are floored at 0.25s; "
+                        "see --allow-fast-armed. 0.5 is the only value with "
+                        "hardware behind it.")
     p.add_argument("--allow-fast-armed", action="store_true",
                    help="Permit an armed run below the 0.25s step-delay floor. "
                         "0.05s was one of three confounded candidate causes of "
@@ -1208,6 +1224,34 @@ def parse_corners(spec: str):
     if len(pts) != 4:
         raise ValueError("need exactly four corners: 'x,y;x,y;x,y;x,y'")
     return pts
+
+
+def describe_exception(exc: BaseException) -> str:
+    """What ended the run, in a form that survives in the artifact.
+
+    This used to record the bare string "Run ended with an exception". The
+    exception itself went only to ``log.exception``, i.e. to the console -- so
+    the moment a terminal scrolled or was closed, the one piece of information
+    worth keeping was gone, and the run folder could not say what had happened.
+
+    Ctrl-C is called out separately because it is not a failure, and a run
+    folder that reports it as one sends the next reader hunting for a bug.
+    """
+    where = ""
+    tb = exc.__traceback__
+    while tb is not None:            # walk to the innermost frame
+        f = tb.tb_frame
+        where = f"{os.path.basename(f.f_code.co_filename)}:{tb.tb_lineno} " \
+                f"in {f.f_code.co_name}"
+        tb = tb.tb_next
+
+    if isinstance(exc, KeyboardInterrupt):
+        return (f"Run INTERRUPTED by the operator (Ctrl-C) at {where}; chip "
+                f"de-energised. Not a failure -- the artifact is partial "
+                f"because the run was stopped, not because anything went wrong.")
+    msg = str(exc).strip()
+    return (f"Run ended with {type(exc).__name__}"
+            f"{': ' + msg if msg else ''} at {where}; chip de-energised.")
 
 
 @dataclass
@@ -1283,6 +1327,14 @@ def main(argv=None) -> int:
         cfg.chip.volt_settle_s = args.volt_settle
     if args.step_delay is not None:
         cfg.sweep.step_delay_s = args.step_delay
+    elif not cfg.armed:
+        # Nothing is energised in a dry run, so nothing needs time to reflow.
+        # Loud rather than silent: the timing a run used has to be visible.
+        cfg.sweep.step_delay_s = cfg.sweep.dry_run_step_delay_s
+        log.info("DRY-RUN: step delay %.2fs (armed runs default to %.2fs). "
+                 "Nothing is energised, so no reflow time is needed. "
+                 "Override with --step-delay.",
+                 cfg.sweep.dry_run_step_delay_s, SweepConfig().step_delay_s)
     if args.block is not None:
         cfg.sweep.block = args.block
     if args.bands is not None:

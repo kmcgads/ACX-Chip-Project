@@ -436,7 +436,7 @@ class ChipController:
         """Compare the startup rail reading against what was commanded.
 
         Previously this readback was logged and nothing looked at it, so a chip
-        that powered up with a dead rail would sweep all 901 steps and report
+        that powered up with a dead rail would sweep all 899 moves and report
         every electrode as failing. Now it is checked, and the orchestrator gates
         the run on an operator confirming it (phase 0b).
 

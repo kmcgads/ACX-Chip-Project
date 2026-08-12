@@ -112,8 +112,9 @@ def plan_bands(chip_rows: int, window_h: int, first_row: int = 1) -> list[int]:
 
     ``first_row`` is where the **first band begins**, which is deliberately not
     the same thing as where the droplet is loaded. Conflating the two is what
-    used to leave row 1 untested: the operator loads at row 2, so bands started
-    at row 2 and nothing ever reached row 1.
+    used to leave row 1 untested: the operator loads part-way down the chip
+    (row 5 as of 2026-08-12, row 2 before that), so bands started at the load
+    row and nothing ever reached the rows above it.
 
     Bands step down by the window height. The final band is **clamped** so the
     bottom edge is covered, deliberately overlapping the previous band rather
@@ -258,7 +259,7 @@ def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int
 
     for band_i, top in enumerate(tops):
         # Walk into the band, one row at a time. This may go UP: the droplet is
-        # loaded at row 2 but band 0 starts at row 1.
+        # loaded at row 5 but band 0 starts at row 1.
         while row != top:
             d = 1 if top > row else -1
             emit_pair(row, col, AXIS_ROW, d, band_i)

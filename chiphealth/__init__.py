@@ -28,5 +28,25 @@ __all__ = [
     "recorder",
 ]
 
+# Artifact layout. Unchanged at 1: run.json gained a `code_version` field on
+# 2026-08-12, but that is additive and the event records are untouched, so
+# bumping this would wrongly signal that older artifacts cannot be read.
+# Readers should treat `code_version` as absent on runs before that date.
 SCHEMA_VERSION = 1
-DETECTOR_VERSION = 1
+
+# Which detector logic produced a verdict. Stamped on every event and used to
+# name rescore output (`events_v{N}.jsonl`).
+#
+#   1  scores every commanded frame.
+#   2  skips KIND_RELEASE frames (ab25606). A release drops the trailing edge
+#      and energises nothing new, so there is no leading edge to measure -- and
+#      it lands before the liquid has had a step to reflow, so judging residue
+#      there flags liquid that is merely still moving.
+#
+# Note on comparability, which is narrower than it first looks: re-scoring a
+# PRE-caterpillar run with v2 gives identical results, because those runs
+# contain no release frames for the new branch to skip. The direction that
+# matters is the other one -- v1 logic turned loose on a caterpillar run would
+# score every release frame and produce nonsense. This number is what stops
+# that going unnoticed.
+DETECTOR_VERSION = 2
