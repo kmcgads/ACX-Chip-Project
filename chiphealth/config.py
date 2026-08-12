@@ -134,7 +134,44 @@ class SweepConfig:
     # capture, detection and artifact writing add ~150-180ms per step at 1080p,
     # so our real interval is ~0.67s where the legacy scripts sit at ~0.5s.
     # Override with --step-delay, which takes precedence.
+    #
+    # IMPORTANT, since caterpillar transport landed: one electrode of TRAVEL is
+    # now two activations (grow, then release), so at this delay the liquid gets
+    # 1.0s per electrode of travel where the legacy scripts give it 0.5s. See
+    # armed_min_step_delay_s.
     step_delay_s: float = 0.5
+
+    # Floor on step_delay_s for an ARMED run. Below this the run refuses to
+    # start unless explicitly overridden.
+    #
+    # Why 0.25 and not 0.5: legacy gives one electrode of travel 0.5s in a
+    # single activation (1pixsplit.py's move_drop -> activate -> sleep(0.5)).
+    # Caterpillar splits that move into two frames, so 0.25s per frame preserves
+    # exactly the same 0.5s-per-electrode budget the working scripts use, while
+    # asking less of the liquid within each frame. That makes 0.25 the fastest
+    # value with an actual argument behind it rather than a guess.
+    #
+    # It is a floor, not a recommendation. 0.5 remains the default and the only
+    # value with hardware behind it. Anything below 0.5 is recorded in the run
+    # notes so a fast run can never be mistaken later for a proven-timing one.
+    #
+    # This exists because --step-delay 0.05 was used on the 2026-08-10 armed
+    # session and became one of three confounded candidate causes for the
+    # droplet coming apart. Fast timing is fine in dry-run -- nothing is
+    # energised and there is no liquid -- and the guard is what makes it safe to
+    # use fast values there habitually without one leaking into an armed run.
+    armed_min_step_delay_s: float = 0.25
+
+    # Stop after this many bands. None = the whole chip, which is the only
+    # setting that produces a coverage result.
+    #
+    # For timing work, not measurement. A step-delay ramp needs the same short
+    # traversal repeated at several delays; at 128 rows and a 20-high window
+    # there are 7 bands, so `--bands 1` is roughly a seventh of the run. The
+    # sweep then misses most of the chip and every affected row is reported
+    # `unknown`, with a PARTIAL SWEEP note in run.json -- a truncated run must
+    # never be readable later as a clean bill of health.
+    max_bands: int | None = None
 
     # "h" (horizontal serpentine only) or "both" (adds a vertical pass).
     # A horizontal sweep mainly exercises column-to-column transitions; the

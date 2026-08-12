@@ -143,15 +143,21 @@ def plan_bands(chip_rows: int, window_h: int, first_row: int = 1) -> list[int]:
     return tops
 
 
-def uncovered_rows(chip_rows: int, window_h: int, first_row: int = 1) -> list[int]:
+def uncovered_rows(chip_rows: int, window_h: int, first_row: int = 1,
+                   max_bands: int | None = None) -> list[int]:
     """Rows no band ever covers.
 
-    Empty when bands start at row 1. Anything listed here is recorded as
-    ``unknown``, never as ``pass`` -- and it cannot be seen in the block grid,
-    since a 4-row block reads ``pass`` on the strength of its other rows.
+    Empty when bands start at row 1 and every band runs. Anything listed here is
+    recorded as ``unknown``, never as ``pass`` -- and it cannot be seen in the
+    block grid, since a 4-row block reads ``pass`` on the strength of its other
+    rows.
+
+    ``max_bands`` truncates the sweep, so most of the chip lands in this list.
+    That is the point: a partial sweep must report the rows it never visited as
+    untested rather than letting them default to anything else.
     """
     covered: set[int] = set()
-    for top in plan_bands(chip_rows, window_h, first_row):
+    for top in plan_bands(chip_rows, window_h, first_row)[:max_bands]:
         covered.update(range(top, top + window_h))
     return [r for r in range(1, chip_rows + 1) if r not in covered]
 
@@ -186,7 +192,8 @@ def untested_electrodes(steps: list["Step"], chip_rows: int,
 
 def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int,
                     start_row: int, start_col: int,
-                    first_band_row: int = 1, prime: bool = True) -> list[Step]:
+                    first_band_row: int = 1, prime: bool = True,
+                    max_bands: int | None = None) -> list[Step]:
     """The full coarse traversal, as an explicit list of commanded windows.
 
     Every step advances exactly one electrode. EWOD transport needs the
@@ -209,6 +216,15 @@ def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int
     Together with ``first_band_row=1`` this makes coverage complete -- see
     :func:`untested_electrodes`, which returns the empty set for the default
     geometry. Pass ``prime=False`` for the old, incomplete behaviour.
+
+    **``max_bands`` deliberately breaks that completeness.** It stops after the
+    first N bands, for timing work where the question is how the liquid behaves
+    per step rather than whether the whole chip is sound -- a step-delay ramp
+    needs the same short traversal repeated at several delays, not seventeen
+    minutes each time. The traversal then misses most of the chip, and the
+    caller is expected to say so loudly: :func:`untested_electrodes` and
+    :func:`uncovered_rows` both report the shortfall, and the orchestrator
+    records a PARTIAL SWEEP note. Never use it for a coverage run.
     """
     col_min = 1
     col_max = chip_cols - window_w + 1
@@ -218,7 +234,10 @@ def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int
             f"(valid {col_min}..{col_max})"
         )
 
-    tops = plan_bands(chip_rows, window_h, first_band_row)
+    if max_bands is not None and max_bands < 1:
+        raise ValueError(f"max_bands must be at least 1, got {max_bands}")
+
+    tops = plan_bands(chip_rows, window_h, first_band_row)[:max_bands]
     steps: list[Step] = []
     row, col = start_row, start_col
     idx = 0
@@ -259,7 +278,8 @@ def plan_serpentine(chip_rows: int, chip_cols: int, window_h: int, window_w: int
 
 def plan_vertical(chip_rows: int, chip_cols: int, window_h: int, window_w: int,
                   start_row: int, start_col: int,
-                  first_band_col: int = 1, prime: bool = True) -> list[Step]:
+                  first_band_col: int = 1, prime: bool = True,
+                  max_bands: int | None = None) -> list[Step]:
     """The orthogonal sweep, for ``axes="both"``.
 
     A horizontal serpentine mainly exercises column-to-column transitions; an
@@ -271,7 +291,8 @@ def plan_vertical(chip_rows: int, chip_cols: int, window_h: int, window_w: int,
     """
     transposed = plan_serpentine(chip_cols, chip_rows, window_w, window_h,
                                  start_col, start_row,
-                                 first_band_row=first_band_col, prime=prime)
+                                 first_band_row=first_band_col, prime=prime,
+                                 max_bands=max_bands)
     flipped: list[Step] = []
     for s in transposed:
         flipped.append(Step(

@@ -714,19 +714,34 @@ class HealthRun:
                                       s.window_h, s.window_w,
                                       s.start_row, s.start_col,
                                       first_band_row=s.first_band_row,
-                                      prime=s.prime_band0)
+                                      prime=s.prime_band0,
+                                      max_bands=s.max_bands)
         if s.axes == "both":
             steps += sweep.plan_vertical(self.cfg.chip.rows, self.cfg.chip.cols,
                                          s.window_h, s.window_w,
                                          s.start_row, s.start_col,
                                          first_band_col=s.first_band_row,
-                                         prime=s.prime_band0)
+                                         prime=s.prime_band0,
+                                         max_bands=s.max_bands)
         log.info("%d steps, %.1f min of delay alone at %.2fs",
                  len(steps), sweep.total_duration_s(steps, s.step_delay_s) / 60.0,
                  s.step_delay_s)
 
+        if s.max_bands is not None:
+            # Loud, and in the artifact. A truncated run must never be readable
+            # later as a clean bill of health for the rows it never visited.
+            total = len(sweep.plan_bands(self.cfg.chip.rows, s.window_h,
+                                         s.first_band_row))
+            msg = (f"PARTIAL SWEEP: {s.max_bands} of {total} bands. This run is "
+                   f"NOT a coverage result -- every row outside those bands is "
+                   f"untested and reported unknown. Intended for step-delay "
+                   f"timing work only.")
+            log.warning(msg)
+            self.rec.note(msg)
+
         self.rec.coverage.never_covered_rows = sweep.uncovered_rows(
-            self.cfg.chip.rows, s.window_h, s.first_band_row)
+            self.cfg.chip.rows, s.window_h, s.first_band_row,
+            max_bands=s.max_bands)
 
         # Verify the planned traversal actually reaches every electrode, and say
         # so if it does not. Cheap, and it means a geometry change can never
@@ -1134,8 +1149,25 @@ def build_parser() -> argparse.ArgumentParser:
                         "watch a supply that is not reaching 45V. Off by "
                         "default -- it makes many extra USB round-trips.")
     p.add_argument("--step-delay", type=float, default=None,
-                   help="Seconds between activations (default 0.5).")
+                   help="Seconds between activations (default 0.5). DRY RUNS "
+                        "can use 0 safely -- nothing is energised and there is "
+                        "no liquid, so the whole sweep takes about as long as "
+                        "the camera needs. ARMED runs are floored at 0.25s "
+                        "(see --allow-fast-armed) and 0.5 is the only value "
+                        "with hardware behind it.")
+    p.add_argument("--allow-fast-armed", action="store_true",
+                   help="Permit an armed run below the 0.25s step-delay floor. "
+                        "0.05s was one of three confounded candidate causes of "
+                        "the 2026-08-10 droplet break-up; do not use this "
+                        "without a reason you can write down.")
     p.add_argument("--block", type=int, default=None, help="Fine block size.")
+    p.add_argument("--bands", type=int, default=None,
+                   help="Stop after N bands instead of sweeping the whole chip "
+                        "(7 bands at the default geometry). FOR TIMING WORK, "
+                        "NOT MEASUREMENT: a step-delay ramp needs the same short "
+                        "traversal at several delays. Rows outside those bands "
+                        "are untested and reported unknown, and the run is "
+                        "marked PARTIAL SWEEP in its notes.")
     p.add_argument("--axes", choices=("h", "both"), default=None,
                    help="'both' adds a vertical sweep at double the cost.")
     p.add_argument("--max-fine-targets", type=int, default=None)
@@ -1178,6 +1210,64 @@ def parse_corners(spec: str):
     return pts
 
 
+@dataclass
+class StepDelayCheck:
+    """Whether this run's step delay is allowed, and what to record about it."""
+
+    ok: bool
+    message: str
+    note: str | None = None   # recorded in run.json when timing is non-default
+
+
+def check_step_delay(cfg, allow_fast_armed: bool = False) -> StepDelayCheck | None:
+    """Gate fast timing on whether anything is actually energised.
+
+    **Dry-run: no floor at all.** `ChipController.activate` never calls
+    `ActivateElec` when disarmed, and `open()` skips `SetPower`/`SetVolt`, so no
+    electrode is energised and there is no liquid being driven. The reflow
+    constraint that makes 0.05s dangerous simply does not exist. `--step-delay 0`
+    is the right setting for iterating on the camera, registration and detector
+    paths.
+
+    **Armed: floored, because there is liquid.** 0.05s on 2026-08-10 is one of
+    three confounded candidate causes of the droplet coming apart. The floor is
+    what lets fast values be used freely in dry-run without one leaking into an
+    armed run by way of shell history.
+
+    Anything below the proven 0.5s is allowed but recorded, so a run at
+    non-default timing can never be mistaken for a proven-timing one months
+    later.
+    """
+    delay = cfg.sweep.step_delay_s
+    floor = cfg.sweep.armed_min_step_delay_s
+    if not cfg.armed:
+        return None
+    if delay < floor and not allow_fast_armed:
+        return StepDelayCheck(
+            ok=False,
+            message=(
+                f"--step-delay {delay} is below the {floor}s floor for an ARMED "
+                f"run. Fast timing is fine for dry runs -- nothing is energised "
+                f"and there is no liquid -- but with liquid on the chip 0.05s "
+                f"was one of three confounded candidate causes of the "
+                f"2026-08-10 droplet break-up.\n"
+                f"  0.5   the default, and the only value with hardware behind "
+                f"it (1pixsplit.py, cleanup.py).\n"
+                f"  0.25  the floor: caterpillar splits one electrode of travel "
+                f"into two frames, so 0.25 per frame gives the liquid the same "
+                f"0.5s per electrode the legacy scripts do.\n"
+                f"Pass --allow-fast-armed to override."))
+    if delay < 0.5:
+        return StepDelayCheck(
+            ok=True,
+            message=(f"Armed run at --step-delay {delay}, below the proven 0.5s."),
+            note=(f"NON-DEFAULT TIMING: step_delay_s={delay} (proven value is "
+                  f"0.5). One electrode of travel got {2 * delay:.2f}s across "
+                  f"the grow/release pair; the legacy scripts give it 0.5s. "
+                  f"Read this run's drag/lag figures with that in mind."))
+    return None
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -1195,6 +1285,11 @@ def main(argv=None) -> int:
         cfg.sweep.step_delay_s = args.step_delay
     if args.block is not None:
         cfg.sweep.block = args.block
+    if args.bands is not None:
+        if args.bands < 1:
+            log.error("--bands must be at least 1, got %d", args.bands)
+            return 2
+        cfg.sweep.max_bands = args.bands
     if args.axes is not None:
         cfg.sweep.axes = args.axes
     if args.max_fine_targets is not None:
@@ -1205,6 +1300,11 @@ def main(argv=None) -> int:
     if args.camera is not None:
         cfg.capture.camera_address = args.camera
     cfg.require_chip_id()
+
+    fast = check_step_delay(cfg, allow_fast_armed=args.allow_fast_armed)
+    if fast is not None and not fast.ok:
+        log.error(fast.message)
+        return 2
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     rec = RunRecorder(cfg, run_id, cfg.chip_id, image_writer=_image_writer())
@@ -1244,6 +1344,10 @@ def main(argv=None) -> int:
     prompter = Prompter(rec, interactive=not (args.non_interactive or args.simulate))
 
     run = HealthRun(cfg, chip, source, rec, view, prompter)
+    if fast is not None and fast.note:
+        # Before run(), so it lands in run.json even if the run aborts early.
+        log.warning(fast.message)
+        rec.note(fast.note)
     stats = run.run()
     blk = cfg.sweep.block
     print(f"\nRun {run_id}: {stats['events']} events, "
