@@ -37,7 +37,7 @@ behaviour changed.
       session, and the disarm must be easy and documented so it does not obstruct real testing
       (`design.md` §9 q5).
 - [x] **Verify the voltage rails before sweeping**, and refuse to continue without operator
-      confirmation on a mismatch. A chip with one dead rail would otherwise sweep all 901 moves,
+      confirmation on a mismatch. A chip with one dead rail would otherwise sweep all 899 moves,
       report the whole chip as failing, and put that in the longitudinal record (phase 0b).
 - [x] **Prompt only where a physical human action is genuinely required** — loading oil or sample,
       adjusting focus, topping up. Never after a routine DLL call. Every prompt records what was

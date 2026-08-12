@@ -1,6 +1,6 @@
 # Priority 1 — build status: BUILT, blocked on a hardware fault
 
-**Updated 2026-08-12.** All modules written. **285 tests, 283 passing** (the 2 failures are
+**Updated 2026-08-12.** All modules written. **326 tests, 324 passing** (the 2 failures are
 environment-dependent — see below). Run against real hardware on 2026-08-10: the camera and
 detection paths worked, **but no armed run has ever passed the voltage check**, so no armed run's
 verdicts are yet interpretable. That fault is the one thing standing between here and a result.
@@ -43,7 +43,7 @@ leading edge on a release, and judging residue there would flag liquid that is s
 
 Consequences worth knowing:
 
-- The coarse sweep is **1802 frames** (901 electrode moves × 2), not 901. At the default 0.5 s
+- The coarse sweep is **1798 frames** (899 electrode moves × 2), not 899. At the default 0.5 s
   step delay that is ~15 minutes of delay alone, before camera and analysis time.
 - The fine pass costs about 64 s more than it used to, at 24 targets.
 - `_transport_to` compares **electrode moves**, not frames, against its budget — otherwise
@@ -94,8 +94,8 @@ the tool for watching it.
 
 ### Run length: what controls it, and what is safe
 
-`--step-delay` is the dominant term. The sweep is 2058 commanded frames, and every one of them
-sleeps for it, so wall-clock ≈ `2058 × step_delay` plus per-frame work.
+`--step-delay` is the dominant term. The sweep is 2054 commanded frames, and every one of them
+sleeps for it, so wall-clock ≈ `2054 × step_delay` plus per-frame work.
 
 Measured 2026-08-12 on this machine:
 
@@ -172,9 +172,9 @@ the identical path.
 
 | bands | frames | 0.50 | 0.35 | 0.25 | 0.18 |
 |---|---|---|---|---|---|
-| 1 | 290 | 2.4 min | 1.7 | 1.2 | 0.9 |
+| 1 | 286 | 2.4 min | 1.7 | 1.2 | 0.9 |
 | 2 | 546 | 4.5 | 3.2 | 2.3 | 1.6 |
-| 7 (full) | 1802 | 15.0 | 10.5 | 7.5 | 5.4 |
+| 7 (full) | 1798 | 15.0 | 10.5 | 7.5 | 5.4 |
 
 ```bash
 for d in 0.50 0.35 0.25 0.18; do
@@ -240,7 +240,7 @@ Three researcher-requested changes, all landed.
 result *logged and never checked*. `ChipController.verify_voltage()` now compares the readback
 against the commanded rails within `volt_tolerance` (default ±2 V), and phase 0b requires the
 operator to confirm before the run continues — refusing to proceed on "n". Without this, a chip
-with one dead rail would sweep all 901 steps and report the entire chip as failing, then leave
+with one dead rail would sweep all 899 moves and report the entire chip as failing, then leave
 that result in the longitudinal record.
 
 Dry-run reads all zeros because `SetVolt` is skipped, so that case is reported as
@@ -329,7 +329,7 @@ coverage fix closed the last blind spot.
         --dead "3,12;col=61" --headless --non-interactive --step-delay 0
 ```
 
-- **2058 commanded frames**: 901 coarse grows + 128 fine transports + 1029 releases
+- **2054 commanded frames**: 899 coarse grows + 128 fine transports + 1027 releases
 - 86 events across all three signatures (`drag`, `residue`, `no_movement`)
 - coverage `{unknown: 0, pass: 979, degraded: 10, fail: 35}` — `unknown` is now **0**, where it
   used to be 20, because bands start at row 1
@@ -505,7 +505,7 @@ Re-pick the corners rather than passing `--reuse-calibration`: the cached calibr
 2026-08-10 and chip reseating invalidates it even when the camera has not moved. Keep
 `--step-delay 0.5`; do not repeat the 0.05 used on 2026-08-10.
 
-**Expect** ~1802 coarse frames ≈ 15 min of delay alone, plus camera and analysis time, then a fine
+**Expect** ~1798 coarse frames ≈ 15 min of delay alone, plus camera and analysis time, then a fine
 pass of roughly 2 min. Operator prompts at: voltage confirm (0b), load the substance (phase 1,
 re-asks up to 3×), focus check (phase 2), and top-up if the droplet shrinks.
 

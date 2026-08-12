@@ -389,7 +389,7 @@ reason the ordering you chose works.
 > | 5×5 (the P1 fine-pass probe) | 1.232 × 1.232 mm |
 > | 20×20 (the loaded droplet) | 4.930 × 4.930 mm |
 >
-> A full coarse sweep therefore drags the droplet **222 mm** over its 901 steps.
+> A full coarse sweep therefore drags the droplet **222 mm** over its 899 electrode moves.
 >
 > ⏰ **Still open: the plate gap (µm). NO VALUE HAS BEEN SUPPLIED OR ADOPTED.** Footprint follows
 > from the pitch; **volume does not** — a droplet is a slab and without its thickness any figure

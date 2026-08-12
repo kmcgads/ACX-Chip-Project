@@ -64,9 +64,16 @@ The script prompts for and expects:
 
 ```
 initial droplet:  20 × 20 electrodes
-position:         row 2, col 5   (top-left region)
-→ Drop(height=20, width=20, row=2, col=5)
+position:         row 5, col 10   (top-left region)
+→ Drop(height=20, width=20, row=5, col=10)
 ```
+
+> **Moved 2026-08-12**, from row 2, col 5. The old position put the droplet's
+> edge against the outer electrodes, which is awkward to load into by hand.
+> Defined once, in `SweepConfig.start_row` / `start_col`; the load prompt, the
+> phase-2 registration check, the resting frame and the traversal plan all read
+> it from there. Coverage is unaffected — bands still start at row 1, so the
+> window now climbs four rows instead of one before band 0 begins.
 
 The operator loads silicon oil filler plus the test substance by hand and confirms. The prompt is
 **structured and logged** — what was asked, what the operator acknowledged, when — not a bare
