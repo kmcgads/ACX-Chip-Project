@@ -733,6 +733,161 @@ class TestProbeSplit(unittest.TestCase):
                 tmp.cleanup()
 
 
+class TestFineTransport(unittest.TestCase):
+    """The fine pass is a caterpillar too: grow, then release.
+
+    The coarse sweep was fixed after the droplet necked and split mid-transport
+    on 2026-08-10, but `_walk` kept the old simultaneous grab/release -- and it
+    runs on a probe droplet a fraction of the parent's volume, so it had even
+    less liquid to spare than the sweep did.
+    """
+
+    def _runner(self, slack=2.0):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = RunConfig()
+        cfg.chip_id = "chip-F"
+        cfg.runs_root = Path(tmp.name)
+        cfg.sweep.fine_travel_slack = slack
+        be = FakeBackend(rows=ROWS, cols=COLS)
+        chip = ChipController(be, ROWS, COLS, cfg.chip.volts, armed=True,
+                              step_delay_s=0.0, sleep=lambda _s: None)
+        rec = RunRecorder(cfg, "ftest", cfg.chip_id, image_writer=lambda p, f: None)
+        rec.start()
+        chip.open()
+        run = HealthRun(cfg, chip, SyntheticSource(simulate.SyntheticRig()), rec,
+                        LiveView(), Prompter(rec, interactive=False))
+        return run, tmp
+
+    @staticmethod
+    def cells(step):
+        r0, r1, c0, c1 = step.covers()
+        return {(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)}
+
+    def walk(self, frm, to, h=5, w=5):
+        run, tmp = self._runner()
+        try:
+            return run._walk(frm, to, h, w, sweep.KIND_TRANSPORT)
+        finally:
+            tmp.cleanup()
+
+    # ── the pairing itself ───────────────────────────────────────────────────
+
+    def test_each_move_is_a_pair(self):
+        """Two commanded frames per electrode, on an L-shaped leg."""
+        steps = self.walk((10, 10), (14, 17))   # 4 rows + 7 cols = 11 moves
+        self.assertEqual(len(steps), 22)
+
+    def test_frames_alternate_transport_then_release(self):
+        steps = self.walk((10, 10), (14, 17))
+        for grow, release in zip(steps[::2], steps[1::2]):
+            self.assertEqual(grow.kind, sweep.KIND_TRANSPORT)
+            self.assertEqual(release.kind, sweep.KIND_RELEASE)
+
+    def test_a_grow_never_releases_anything(self):
+        """The whole point -- the fine-pass twin of the coarse-sweep test."""
+        for frm, to in (((10, 10), (14, 17)), ((60, 60), (55, 52)),
+                        ((30, 5), (30, 9)), ((5, 30), (9, 30))):
+            with self.subTest(frm=frm, to=to):
+                prev = None
+                for s in self.walk(frm, to):
+                    cur = self.cells(s)
+                    if prev is not None and s.kind == sweep.KIND_TRANSPORT:
+                        self.assertTrue(prev <= cur,
+                                        f"grow at step {s.idx} dropped cells")
+                    prev = cur
+
+    def test_no_frame_jumps_more_than_one_electrode(self):
+        """EWOD transport cannot jump: the window must overlap the droplet.
+
+        A grow holds the origin and widens; only the release advances it. So
+        the bound is one, not exactly one.
+        """
+        frm = (10, 10)
+        for to in ((14, 17), (6, 4), (10, 20), (20, 10)):
+            with self.subTest(to=to):
+                prev = frm
+                for s in self.walk(frm, to):
+                    self.assertLessEqual(
+                        abs(s.row - prev[0]) + abs(s.col - prev[1]), 1,
+                        f"step {s.idx} jumped from {prev} to {(s.row, s.col)}")
+                    prev = (s.row, s.col)
+
+    def test_the_walk_still_arrives(self):
+        for to in ((14, 17), (6, 4), (10, 20), (20, 10)):
+            with self.subTest(to=to):
+                last = self.walk((10, 10), to)[-1]
+                self.assertEqual((last.row, last.col), to)
+
+    def test_a_zero_length_walk_emits_nothing(self):
+        self.assertEqual(self.walk((10, 10), (10, 10)), [])
+
+    def test_indices_are_unique_and_consecutive(self):
+        steps = self.walk((10, 10), (14, 17))
+        self.assertEqual([s.idx for s in steps], list(range(len(steps))))
+
+    # ── the budget ───────────────────────────────────────────────────────────
+
+    def test_budget_is_spent_in_moves_not_frames(self):
+        """Recorded `spent` must stay comparable with runs from before the pair.
+
+        Counting frames would double every `unreachable` record for the same
+        distance and halve the effective `fine_travel_slack`.
+        """
+        run, tmp = self._runner()
+        try:
+            driven = []
+            run._drive = lambda step: (driven.append(step), True)[1]
+            run.pos = (10, 10)
+            self.assertTrue(run._transport_to((14, 17), 5, 5))
+            self.assertEqual(run._last_transport_spent, 11)   # moves
+            self.assertEqual(len(driven), 22)                 # frames
+            self.assertEqual(run.pos, (14, 17))
+        finally:
+            tmp.cleanup()
+
+    def test_default_slack_still_reaches_targets_it_used_to(self):
+        """Regression guard on the units: at slack 2.0 an 11-move leg is well
+        inside a 22-move budget. Comparing frames would leave it at zero
+        margin, and any slack below 2.0 would fail outright."""
+        run, tmp = self._runner(slack=2.0)
+        try:
+            run._drive = lambda step: True
+            run.pos = (10, 10)
+            self.assertTrue(run._transport_to((14, 17), 5, 5))
+            self.assertEqual(run._last_transport_budget, 22)
+            self.assertLess(run._last_transport_spent,
+                            run._last_transport_budget)
+        finally:
+            tmp.cleanup()
+
+    def test_an_over_budget_leg_is_unreachable_and_drives_nothing(self):
+        run, tmp = self._runner(slack=0.5)
+        try:
+            driven = []
+            run._drive = lambda step: (driven.append(step), True)[1]
+            run.pos = (10, 10)
+            self.assertFalse(run._transport_to((14, 17), 5, 5))
+            self.assertEqual(driven, [], "gave up but energised anyway")
+            self.assertEqual(run._last_transport_spent, 11)
+            self.assertEqual(run._last_transport_budget, 6)   # round(11 * 0.5)
+        finally:
+            tmp.cleanup()
+
+    def test_the_unreachable_event_reports_moves(self):
+        run, tmp = self._runner(slack=0.5)
+        try:
+            run._drive = lambda step: True
+            run.pos = (10, 10)
+            self.assertFalse(run._transport_to((14, 17), 5, 5))
+            ev = run.det.unreachable((14, 17), step_idx=-1, frame_index=-1,
+                                     t=0.0, spent=run._last_transport_spent,
+                                     budget=run._last_transport_budget)
+            self.assertIn("within 6 steps", ev.detail)
+            self.assertIn("11 spent", ev.detail)
+        finally:
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
 

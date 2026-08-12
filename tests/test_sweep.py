@@ -43,6 +43,79 @@ class TestBands(unittest.TestCase):
             sweep.plan_bands(10, 20, 1)
 
 
+class TestGrowRelease(unittest.TestCase):
+    """The pair emitter both passes share. One electrode = two frames."""
+
+    @staticmethod
+    def cells(step):
+        r0, r1, c0, c1 = step.covers()
+        return {(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)}
+
+    def pair(self, axis, direction, kind=sweep.KIND_GROW):
+        return sweep.grow_release(0, 10, 10, 4, 6, axis, direction, kind, band=0)
+
+    def test_the_grow_only_adds_never_drops(self):
+        """The whole point: previously-energised cells must stay energised."""
+        for axis in (AXIS_COL, AXIS_ROW):
+            for d in (+1, -1):
+                with self.subTest(axis=axis, direction=d):
+                    grow, release = self.pair(axis, d)
+                    start = self.cells(sweep.Step(
+                        idx=-1, row=10, col=10, h=4, w=6, axis=axis,
+                        direction=d, kind=sweep.KIND_GROW, band=0))
+                    grown = self.cells(grow)
+                    self.assertTrue(start < grown, "grow dropped cells")
+                    # Exactly one new rank of electrodes, no more.
+                    added = len(grown) - len(start)
+                    self.assertEqual(added, 4 if axis == AXIS_COL else 6)
+
+    def test_the_release_restores_the_window_one_electrode_along(self):
+        for axis, d, want in ((AXIS_COL, +1, (10, 11)), (AXIS_COL, -1, (10, 9)),
+                              (AXIS_ROW, +1, (11, 10)), (AXIS_ROW, -1, (9, 10))):
+            with self.subTest(axis=axis, direction=d):
+                _, release = self.pair(axis, d)
+                self.assertEqual((release.row, release.col), want)
+                self.assertEqual((release.h, release.w), (4, 6))
+
+    def test_both_frames_share_the_leading_edge(self):
+        """The release drops the trailing edge; it does not advance the front.
+
+        If it did, the release would be entering fresh territory unobserved --
+        the detector skips scoring it.
+        """
+        for axis in (AXIS_COL, AXIS_ROW):
+            for d in (+1, -1):
+                with self.subTest(axis=axis, direction=d):
+                    grow, release = self.pair(axis, d)
+                    self.assertEqual(grow.leading_edge, release.leading_edge)
+
+    def test_backwards_growth_moves_the_origin_back_and_widens(self):
+        grow, _ = self.pair(AXIS_COL, -1)
+        self.assertEqual((grow.col, grow.w), (9, 7))
+        grow, _ = self.pair(AXIS_ROW, -1)
+        self.assertEqual((grow.row, grow.h), (9, 5))
+
+    def test_forwards_growth_holds_the_origin(self):
+        grow, _ = self.pair(AXIS_COL, +1)
+        self.assertEqual((grow.col, grow.w), (10, 7))
+        grow, _ = self.pair(AXIS_ROW, +1)
+        self.assertEqual((grow.row, grow.h), (10, 5))
+
+    def test_the_trailing_frame_is_always_a_release(self):
+        """Whatever the grow is labelled, the release must be KIND_RELEASE --
+        that label is what stops the detector and simulator scoring it."""
+        for kind in (sweep.KIND_GROW, sweep.KIND_TRANSPORT):
+            with self.subTest(kind=kind):
+                grow, release = self.pair(AXIS_COL, +1, kind=kind)
+                self.assertEqual(grow.kind, kind)
+                self.assertEqual(release.kind, sweep.KIND_RELEASE)
+
+    def test_indices_are_consecutive(self):
+        grow, release = sweep.grow_release(7, 10, 10, 4, 6, AXIS_COL, +1,
+                                           sweep.KIND_GROW, band=0)
+        self.assertEqual((grow.idx, release.idx), (7, 8))
+
+
 class TestSerpentine(unittest.TestCase):
 
     def setUp(self):
