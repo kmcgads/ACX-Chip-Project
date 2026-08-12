@@ -92,6 +92,112 @@ caused the fault — a rail flat at 0 V is equally consistent with a connection 
 rail 3 still reads 0 after this, that is strong evidence the fault is physical. `--volt-poll` is
 the tool for watching it.
 
+### Run length: what controls it, and what is safe
+
+`--step-delay` is the dominant term. The sweep is 2058 commanded frames, and every one of them
+sleeps for it, so wall-clock ≈ `2058 × step_delay` plus per-frame work.
+
+Measured 2026-08-12 on this machine:
+
+| Configuration | Time | Bound by |
+|---|---|---|
+| `--simulate --step-delay 0` | **1.9 s** | software only (~0.9 ms/frame) |
+| `--simulate --step-delay 0.01` | 25 s | sleep; Windows granularity adds ~1.4 ms per call |
+| dry run, real camera, `--step-delay 0` | **~1.5 min** (est.) | camera grab + ~5.4 ms/frame detection |
+| armed, `--step-delay 0.5` | **~17 min** + camera | the delay |
+
+The ~5.4 ms is a measured HSV+threshold+contour pass on a 1920×1080 frame. The grab itself is not
+measurable without the rig; at MJPG 30 fps expect ~33 ms, hence the ~1.5 min estimate.
+
+**Dry runs have no timing floor and do not need one.** `ChipController.activate` never calls
+`ActivateElec` when disarmed, and `open()` skips `SetPower`/`SetVolt` — so no electrode is
+energised and there is no liquid being driven. The reflow constraint that makes fast timing risky
+with liquid on the chip does not exist. Use `--step-delay 0`; do not use a small non-zero value
+like 0.001, which costs ~1.4 ms per frame anyway for no benefit.
+
+For iterating on sweep/detector/recorder logic, `--simulate --step-delay 0` is 1.9 s and skips the
+camera entirely. Use the real camera only when the camera path is what you are testing.
+
+### Why 0.5 s, and whether the caterpillar changes it
+
+**Where 0.5 came from: the legacy scripts, and nothing else.** `1pixsplit.py:65` is
+`ActivateElec(...)` followed by `time.sleep(0.5)`; `cleanup.py` sets `STEP_DELAY = 0.5`. **No
+reflow time has ever been measured on this rig.** 0.5 is "what the working scripts do", not "what
+the liquid needs". Worth knowing: `1pixsplit.py` uses the same 0.5 s for its *stretch* loop (a pure
+grow, lines 164-169) as for `move_drop`'s translations — legacy does not distinguish the two.
+
+**What the caterpillar changed, quantitatively.** It cuts both ways:
+
+- *Per frame, it asks less.* A legacy translation frame asks the liquid to advance its leading edge
+  and release its trailing edge in the same instant. A caterpillar grow asks only that it advance
+  one column while everything behind stays energised — it is never unsupported. The release asks
+  only that it retract into territory that is still energised.
+- *Per electrode of travel, it already doubled the time.* Two frames per move, so at 0.5 s the
+  liquid gets **1.0 s per electrode** where the legacy scripts give it 0.5 s.
+
+So the sweep currently runs the liquid at half the legacy speed per electrode, with each frame
+making a smaller demand. There is real headroom.
+
+**The defensible faster value is 0.25 s**, and the argument is arithmetic rather than a guess: two
+frames × 0.25 s restores exactly the 0.5 s per electrode of travel that the legacy scripts use,
+while each individual frame asks strictly less of the liquid than a legacy frame did. It also
+returns the coarse sweep to ~7.5 min, its pre-caterpillar duration.
+
+**The honest counter-argument:** `1pixsplit.py` gives a *pure grow* the full 0.5 s, so measured
+per frame rather than per move, 0.25 gives our grow frames half what legacy gives a comparable
+one. Which framing the physics favours is genuinely unknown, because the reflow time has never
+been measured.
+
+**Do not change it on the next armed run.** Voltage is the unresolved blocker. Fixing voltage and
+dropping the delay in the same run reproduces the 2026-08-10 problem of not being able to attribute
+the outcome. Run at 0.5 first and get a baseline.
+
+**Then measure it rather than guess.** `detector.compute_lag` already records, every step, how far
+the contact line trails the commanded edge in electrodes — that is precisely "is the liquid keeping
+up", and it is in `timeline.jsonl` for every run. The procedure:
+
+1. First valid armed run at 0.5 → baseline lag distribution. Median near 0 with p95 well under the
+   2.0-electrode drag threshold means there is slack.
+2. Ramp test over **one band**, not the whole chip: 0.5, 0.35, 0.25, 0.18 — a couple of minutes
+   each. Watch where lag starts climbing above the baseline.
+3. Adopt the fastest delay where lag stays flat, with margin.
+
+### The ramp test
+
+`--bands N` stops the sweep after N bands (7 at the default geometry), which is what makes step 2
+practical. Band 0 alone is 290 frames — 16% of the run — and it is the same traversal every time,
+so it is a clean like-for-like comparison across delays. Note band 0 includes the priming leg, so
+it is not a *typical* band; that does not matter here, because the comparison is between runs of
+the identical path.
+
+| bands | frames | 0.50 | 0.35 | 0.25 | 0.18 |
+|---|---|---|---|---|---|
+| 1 | 290 | 2.4 min | 1.7 | 1.2 | 0.9 |
+| 2 | 546 | 4.5 | 3.2 | 2.3 | 1.6 |
+| 7 (full) | 1802 | 15.0 | 10.5 | 7.5 | 5.4 |
+
+```bash
+for d in 0.50 0.35 0.25 0.18; do
+  .venv/Scripts/python.exe -m chiphealth.run_health \
+      --chip-id trial01 --arm --camera 0 --bands 1 --step-delay $d
+done
+```
+
+**Whole ramp: ~7 minutes of rig time**, camera included. Then compare the `lag` distribution per
+run out of `timeline.jsonl` and take the fastest delay where it stays flat.
+
+Two things the flag does deliberately: every row outside the swept bands is reported `unknown` in
+`coverage.json`, and the run carries a `PARTIAL SWEEP: N of 7 bands ... NOT a coverage result` note.
+A truncated run must never read later as a clean bill of health. Runs below 0.5 also carry the
+`NON-DEFAULT TIMING` note, so a ramp run is doubly marked.
+
+### The armed timing guard
+
+`--step-delay` below `armed_min_step_delay_s` (0.25) refuses to start an armed run, naming the
+2026-08-10 confound and pointing at `--allow-fast-armed`. Anything below the proven 0.5 is allowed
+but written into the run notes as `NON-DEFAULT TIMING`, so a fast run can never be mistaken months
+later for a proven-timing one. Dry runs are not gated at all.
+
 ### ⚠ The 2026-08-10 armed session — and why its diagnosis is confounded
 
 Sixteen armed attempts. **Every one that recorded a voltage check failed it:**
