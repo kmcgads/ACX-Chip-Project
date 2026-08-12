@@ -82,8 +82,9 @@ once in the live window give a homography; it is cached in config and reused whi
 does not move.
 
 **Electrode pitch is not needed for this** — corner registration gives the full mapping. The pitch
-deferred to Priority 3 (§1.4) does not block anything here; it would only be needed to report
-physical units rather than electrode counts.
+did not block anything here; it would only be needed to report physical units rather than electrode
+counts. *(Update 2026-08-10: resolved at 246.48 µm, `objectives.md` §2.1. It was deferred to what
+was then Priority 3 and is now Priority 2.)*
 
 **Self-check, free:** the initial droplet is at a *known* position and size. After registration,
 the detected blob's centroid must map to approximately (2,5)+10 and its area to ~400 electrodes.
@@ -214,8 +215,11 @@ attached, and it is what `rescore.py` re-runs over historical recordings.
 > iterated on** (researcher), and imposing five layers on it now would slow that down. `chiphealth/`
 > is flatter on purpose. The layering is not abandoned: `actuation.py` is the future
 > `l1_primitives/chip_dll.py` + part of `l2_subsystems/chip.py`, and reconciliation happens when
-> Priority 2 lands and a second subsystem needs the shared L0. Flagging rather than silently
-> diverging.
+> a second subsystem needs the shared L0. Flagging rather than silently diverging.
+>
+> *(Update 2026-08-12: this originally said "when Priority 2 lands", meaning the axis. The axis is
+> deferred — `objectives.md` Appendix A — so there is no second subsystem scheduled and this
+> reconciliation has no date. The divergence stands until one arrives.)*
 
 ---
 
@@ -429,9 +433,10 @@ chip provides any.
 
 ## 12. Deferred
 
-Electrode pitch (⏰ Priority 3, §3.1) · electrical/percentage scoring (§1.6, no known path
-today) · the ML model itself — this design produces its dataset, nothing more · automatic
-degradation learning (§1.6) · the shim (`design.md` §9 q1).
+~~Electrode pitch~~ ✅ resolved 2026-08-10 at 246.48 µm · plate gap (⏰ still open,
+`objectives.md` §2.4 q3 — blocks reporting volumes) · electrical/percentage scoring (§1.6, no
+known path today) · the ML model itself — this design produces its dataset, nothing more ·
+automatic degradation learning (§1.6) · the shim (`design.md` §9 q1).
 
 ---
 

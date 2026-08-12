@@ -1,9 +1,29 @@
 # Acxchip — design
 
-**Status:** draft for review. No code written yet.
+**Status:** partially realised. **Amended 2026-08-12.**
 **Scope:** a layered Python API over the ACX/Sigenex AM-DMF instrument, replacing the
 flat script collection in `project/` with a tested library.
 **Evidence base:** `workspace/analysis.md` §1–§29 (static analysis of the vendor bundle).
+
+> **⚠ What has actually been built, and where this document is now aspirational.**
+>
+> This was written before any code existed and describes a full five-subsystem layered API
+> (`l0_transport` / `l1_primitives` / `l2_subsystems` / `l3` / `l4`). What exists is the **chip
+> health package** — `chiphealth/` plus `rescore.py`, ~4000 lines, 285 tests. It is deliberately
+> flatter than the layering below; see `p1_chip_health_design.md` §11 for why, and note that the
+> reconciliation described there now has no scheduled trigger.
+>
+> Where this document and `objectives.md` disagree, **`objectives.md` wins** — that is the rule
+> stated in its header, and the §5 deltas listed there have now been applied here.
+>
+> **The axis is deferred.** `objectives.md` Appendix A, 2026-08-12. Everything below describing
+> axis bindings, `l1_primitives/axis.py`, or the axis as a first deliverable is **superseded**.
+> The analysis it rests on is unaffected and still accurate.
+>
+> **Camera bindings are cancelled by policy.** §5.3's `MvCameraControl.dll` binding and §6's
+> `CameraPair` are excluded by the camera policy in `objectives.md` §0.2 — the researcher's own
+> camera via `cv2.VideoCapture` is the measurement path. Descriptions of the vendor camera stack
+> below are retained as *analysis*, not as plan.
 
 ---
 
@@ -376,28 +396,43 @@ alternatives · **0003** ABI sanity check at load · **0004** WinPcap dependency
 
 ---
 
-## 9. Open questions — need your decision before coding
+## 9. Open questions
+
+**Status updated 2026-08-12.** Three of the five are closed; the disposition is recorded in
+`objectives.md` §5.
 
 1. **Shim feasibility.** Do you have (or can you get) a Windows machine with MSVC + Qt 5.14.2 to
-   build `acxshim.dll`? If not, we ship axis + camera + chip-basic first and the four
-   `*InterFace` subsystems stay behind the fake backend. This is the biggest fork in the plan.
-2. **Scope of first release.** Everything, or the no-native-build subset above?
+   build `acxshim.dll`?
+   → **DEFERRED, and cheaper to defer than it looked.** Every active priority is designed to need
+   no native build. Priority 2 (droplet size) is expected to produce evidence on whether the
+   missing timing/polarity/frequency control is the real binding constraint — a better basis for
+   this decision than the guess available today.
+2. **Scope of first release.** Everything, or the no-native-build subset?
+   → **ANSWERED** by the priority order: the no-native-build subset.
 3. **Legacy scripts.** Leave `project/`'s 13 scripts untouched, or port `masterscript3.py` onto
    the new API as the L4 proof and deprecate the rest?
-4. **Camera.** Keep your UVC camera as the measurement path, add the Hikrobot pair, or support
-   both behind one interface? (See the camera comparison — different sensor, and your autofocus
-   is currently unpinned, which is a ΔE variance risk.)
-5. **Safety default.** I propose every hardware-mutating call is refused unless the session is
-   explicitly armed (`Chip(arm=True)` or `ACXCHIP_ARM=1`), with dry-run the default that logs
-   intended frames without energising. Confirm you want that — it will feel like friction.
+   → **STILL OPEN.** `objectives.md` §0.1 commits to improving on them rather than wrapping them,
+   but their fate is undecided. Note the measured constraints: 9 of 13 load the DLL at import
+   time, so a dispatcher that imports them crashes on any machine without it.
+4. **Camera.** Keep your UVC camera, add the Hikrobot pair, or support both?
+   → **ANSWERED: the researcher's own camera only.** `objectives.md` §0.2. Autofocus is now off
+   and recorded per run, closing the ΔE variance risk. Revisiting this is the one route by which
+   the deferred axis work could return — see `objectives.md` §2.4 q4.
+5. **Safety default** — refuse hardware-mutating calls unless explicitly armed.
+   → **ANSWERED: yes, and built.** Dry-run is the default; `--arm` or `ACXCHIP_ARM=1` arms a
+   session. `chiphealth/actuation.py`. A voltage-confirmation gate (phase 0b) was added on top
+   after the first hardware session.
 
-## 10. Proposed first step (on approval)
+## 10. First step — superseded
 
-**L0 + L1 axis only.** Rationale: the axis needs no shim, no native build, and no Windows to
-develop against; it exercises loader, structs, backend abstraction and the full test tier
-structure end to end; and it is the subsystem with a known reliability problem (§15), so a clean
-binding with real error reporting has diagnostic value immediately.
-
-Deliverables: `l0_transport/*`, `l1_primitives/axis.py`, `tests/unit/test_axis_primitives.py`,
-`tests/contract/test_axis_abi.py`, `docs/steps/001-l0-transport.md`,
-`docs/steps/002-l1-axis.md`, ADRs 0001 and 0004.
+> **SUPERSEDED.** This section proposed **L0 + L1 axis only** as the first deliverable, on the
+> reasoning that the axis needs no shim and has a known reliability problem worth diagnosing.
+>
+> The researcher's priority ordering put the electrode/health script first instead, and that is
+> what was built (`chiphealth/`, `p1_chip_health_design.md`). As of 2026-08-12 the axis is
+> **deferred entirely** (`objectives.md` Appendix A), so this section is dead rather than merely
+> reordered. Its deliverable list — `l0_transport/*`, `l1_primitives/axis.py`,
+> `tests/contract/test_axis_abi.py`, ADRs 0001 and 0004 — describes no planned work.
+>
+> Retained so the reasoning is not lost: if the axis is ever reopened, the argument for starting
+> there still holds on its own terms.

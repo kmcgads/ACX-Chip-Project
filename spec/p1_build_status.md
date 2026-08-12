@@ -1,9 +1,130 @@
-# Priority 1 — build status: COMPLETE
+# Priority 1 — build status: BUILT, blocked on a hardware fault
 
-**Updated 2026-08-07.** All modules written. **224 tests, all passing.** Not yet run against
-real hardware — that is the next step and it needs the instrument PC.
+**Updated 2026-08-12.** All modules written. **285 tests, 283 passing** (the 2 failures are
+environment-dependent — see below). Run against real hardware on 2026-08-10: the camera and
+detection paths worked, **but no armed run has ever passed the voltage check**, so no armed run's
+verdicts are yet interpretable. That fault is the one thing standing between here and a result.
 
-    cd project && python3 -m unittest discover -s tests -t .
+    .venv/Scripts/python.exe -m unittest discover -s tests -t .
+
+> The venv in this repo is a **Windows** venv (`.venv/Scripts/`, not `.venv/bin/`) and does not
+> have pytest installed, so `unittest` is the runner. Under WSL, invoke `python.exe` as above.
+
+**The 2 failing tests.** `test_picker_create_returns_none_without_opencv` and
+`test_picker_unavailable_says_so_and_still_aborts_cleanly` both assert that `CornerPicker.create()`
+returns `None` when OpenCV is unavailable. OpenCV *is* installed in this venv, so they fail here —
+and would fail on any machine with cv2. They are testing real behaviour with the wrong setup; the
+fix is to mock the import rather than depend on the ambient environment. Not caused by any recent
+change, and not a defect in the code under test.
+
+## Status since 2026-08-07
+
+| Change | State |
+|---|---|
+| Camera bug fixes | ✅ committed |
+| Resolution / boundary-filter fixes | ✅ committed, validated |
+| Caterpillar transport — coarse sweep | ✅ committed (`ab25606`, `0f6e383`) |
+| Caterpillar transport — fine pass | ✅ written and tested, **uncommitted** as of 2026-08-12 |
+| First armed runs on the instrument | ⚠ attempted 2026-08-10, **blocked by a voltage fault** |
+| A valid armed run | ❌ not yet achieved |
+
+### Caterpillar transport — why every move is now two frames
+
+A one-electrode move used to be a single `ActivateElec` that advanced the window's origin and held
+its width, which asks the liquid to release behind and grab ahead in the same instant. It cannot
+reflow that fast. Every working legacy script avoids this: `mdmixing.py` grows the region (width
+20 → 35) before anything releases, and `cleanup.py` only ever shrinks a corner-anchored region.
+
+A move is now a **grow/release pair** — extend one column into fresh territory holding everything
+already energised, then drop the trailing column. `sweep.grow_release()` is the single emitter,
+used by the coarse serpentine and by the fine pass's `_walk`. The release frame is labelled
+`KIND_RELEASE`, which is what tells the detector and the simulator not to score it: there is no new
+leading edge on a release, and judging residue there would flag liquid that is simply still moving.
+
+Consequences worth knowing:
+
+- The coarse sweep is **1802 frames** (901 electrode moves × 2), not 901. At the default 0.5 s
+  step delay that is ~15 minutes of delay alone, before camera and analysis time.
+- The fine pass costs about 64 s more than it used to, at 24 targets.
+- `_transport_to` compares **electrode moves**, not frames, against its budget — otherwise
+  `fine_travel_slack` would silently halve and every `unreachable` record would double against
+  runs made before the change.
+- `_split_probe`'s walk-clear step is deliberately **not** caterpillared. It is `dropsplitoff.py`'s
+  hardware-proven sequence and the split is the most failure-prone step in the run, so it was not
+  changed without rig evidence. It carries the same hazard; there is a comment saying so.
+
+### Voltage startup now copies `csvvolcont.py` call for call
+
+**2026-08-12.** The values were never wrong — `ChipConfig.volts` has always been
+`(45, 45, 45, 0, 0, 0, 0, 0, 0)`, matching every legacy script, and rail 3 has always been
+commanded exactly like rails 1 and 2. The divergence was in *how many times* we talked to the
+device and *when*.
+
+| | Legacy (all 8 scripts) | chiphealth before | chiphealth now |
+|---|---|---|---|
+| Call order | `InitUSB`→`OpenUSB`→`SetPower`→`SetVolt`→`InquireVolt` | same | same |
+| `SetVolt` args | 9 positional ints | 9 positional ints | 9 positional ints |
+| `argtypes` | none | none | none |
+| Delay `SetPower`→`SetVolt` | `input()` / none | **2.0 s** | **0** |
+| Delay `SetVolt`→read | `input()` / 0.3 s | 0.25 s then polling | **0.3 s** |
+| **`InquireVolt` calls** | **1** | **up to 14** | **1** |
+
+`InquireVolt` is not a getter. Analysis §2 records that each call issues a `libusb_bulk_transfer`
+and parses an 18-byte `0xAA`-framed response — so the old path made up to fourteen USB round-trips
+during power-up where the proven scripts make one. The rails are now read once in
+`ChipController.open()` and cached; `verify_voltage()` judges that reading instead of taking its
+own. `read_rails(refresh=True)` forces a fresh read when you have physically changed something.
+
+Two smaller fixes in the same pass:
+
+- **The settle loop's early exit was backwards.** It returned as soon as two consecutive polls
+  matched — and two consecutive readings of `(0,0,0)` during ramp-up are indistinguishable from a
+  settled supply. A slow rail therefore got *less* settle time, not more. The polling survives as
+  `--volt-poll`, off by default, and no longer exits early.
+- **`FakeBackend` could not model this fault at all.** Its `SetVolt` stored what it was given and
+  `InquireVolt` handed it straight back, so a supply that fails to reach its commanded voltage was
+  unrepresentable. New `FakeBackend.readback` overrides what `InquireVolt` returns; there is now a
+  test reproducing the exact 2026-08-10 reading (commanded 45/45/45, reads 16/15/0).
+
+**This is a sequence fix, not a proven cause.** It removes a real and unjustified divergence from
+your working code, which is worth doing on its own terms. It does not establish that the divergence
+caused the fault — a rail flat at 0 V is equally consistent with a connection or supply problem. If
+rail 3 still reads 0 after this, that is strong evidence the fault is physical. `--volt-poll` is
+the tool for watching it.
+
+### ⚠ The 2026-08-10 armed session — and why its diagnosis is confounded
+
+Sixteen armed attempts. **Every one that recorded a voltage check failed it:**
+
+| Run | Commanded | Read back |
+|---|---|---|
+| `20260810T205023Z` | 45, 45, 45 | 1, 1, 0 |
+| `20260810T205044Z` | 45, 45, 45 | 0, 0, 0 |
+| `20260810T210337Z` | 45, 45, 45 | **16, 15, 0** |
+
+Rail 3 read **0 V on every attempt**. The best any run achieved was 16/15/0.
+
+Three runs did sweep (`211057Z`, `211551Z`, `213032Z`, reaching 384 / 184 timeline frames before
+being stopped). All three were killed before `finalize()`, so their voltage notes were never
+written — **we do not know what the rails were doing during the run that produced the split.**
+
+What those runs recorded: `drag` with the contact line ~4 electrodes behind the commanded edge,
+then 69 `no_movement` events, then a `residue` blob of **321 electrodes** — most of a 400-electrode
+window's worth of liquid sitting in already-swept territory, with `primary_area` falling 340 → 225.
+That is the droplet ceasing to follow and the window walking away from it.
+
+**Three candidate causes, and the artifacts cannot separate them:**
+
+1. **Voltage** — 16 V with one rail dead is plausibly too weak to drag a 20×20 droplet at all.
+2. **Step delay** — those runs used `step_delay_s: 0.05`, ten times faster than the 0.5 s default
+   and than what `1pixsplit.py` uses. 50 ms is very little reflow time.
+3. **Transport pattern** — the simultaneous grab/release, since fixed.
+
+The caterpillar fix is correct on its own merits — the physics is sound and every legacy script
+already does it — but **it should not be assumed to be the fix for what was observed.** Any code
+comment or note asserting that the 2026-08-10 split was *caused* by the transport pattern is
+stating more than the evidence supports. Those runs also predate the fix entirely: their timeline
+frames are `travel`/`band`, the pre-caterpillar kinds. The caterpillar has never run on hardware.
 
 ## Improvement round — 2026-08-07
 
@@ -74,33 +195,41 @@ at band changes — the pre-existing anisotropy, for which `--axes both` remains
 
 ## What exists
 
+Line counts as of 2026-08-12.
+
 | File | Lines | Role |
 |---|---|---|
-| `camera.py` | 444 | **edited in place** (was 214) — persistent capture, wide-field detection |
-| `chiphealth/config.py` | 190 | all former magic numbers, one place |
-| `chiphealth/geometry.py` | 270 | homography, electrode↔pixel, registration check |
-| `chiphealth/sweep.py` | 295 | bands, serpentine, block map, fine routing |
+| `colormixing/camera.py` | 456 | **edited in place** (was 214) — persistent capture, wide-field detection |
+| `chiphealth/config.py` | 303 | all former magic numbers, one place |
+| `chiphealth/geometry.py` | 320 | homography, electrode↔pixel, registration check |
+| `chiphealth/calibration.py` | 233 | corner validation, cache, drift reporting |
+| `chiphealth/sweep.py` | 371 | bands, serpentine, `grow_release`, block map, fine routing |
 | `chiphealth/detector.py` | 326 | drag · residue · no-movement · unreachable |
-| `chiphealth/actuation.py` | 375 | `Drop`, real + fake backends, arming gate |
-| `chiphealth/recorder.py` | 443 | coverage map, artifacts, dataset fields |
-| `chiphealth/simulate.py` | 167 | synthetic rig with injectable faults |
-| `chiphealth/run_health.py` | 664 | eight-phase orchestrator + CLI |
+| `chiphealth/actuation.py` | 492 | `Drop`, real + fake backends, arming gate, voltage verify |
+| `chiphealth/recorder.py` | 454 | coverage map, artifacts, dataset fields |
+| `chiphealth/simulate.py` | 181 | synthetic rig with injectable faults |
+| `chiphealth/run_health.py` | 1304 | eight-phase orchestrator + corner picker + CLI |
 | `rescore.py` | 220 | offline re-scoring, label promotion |
-| `tests/` | 1557 | 169 tests |
+| `tests/` | 2654 | 285 tests |
 
 ## Verified by running it
 
-Full synthetic run, 128×128, faults injected at block (3,12) and column 61:
+Full synthetic run, 128×128, faults injected at block (3,12) and column 61. Figures re-measured
+2026-08-12 — they changed when caterpillar transport doubled the frame count and the row-1
+coverage fix closed the last blind spot.
 
 ```
-python3 -m chiphealth.run_health --chip-id chip-A --simulate \
+.venv/Scripts/python.exe -m chiphealth.run_health --chip-id sim --simulate \
         --dead "3,12;col=61" --headless --non-interactive --step-delay 0
 ```
 
-- 867 coarse steps + 128 fine-pass steps = 995 activations
+- **2058 commanded frames**: 901 coarse grows + 128 fine transports + 1029 releases
 - 86 events across all three signatures (`drag`, `residue`, `no_movement`)
-- coverage `{unknown: 20, pass: 959, degraded: 10, fail: 35}`
+- coverage `{unknown: 0, pass: 979, degraded: 10, fail: 35}` — `unknown` is now **0**, where it
+  used to be 20, because bands start at row 1
 - 45 suspicious blocks found, 24 re-tested, **21 dropped by the cap and named in the notes**
+- fine-pass legs alternate `transport` / `release` with zero violations across all 24 targets
+- every event fires on a `grow` or `transport` frame; **none** on a `release`
 - artifacts: `run.json`, `timeline.jsonl`, `observations.jsonl`, `events.jsonl`,
   `coverage.json`, `summary.md`
 
@@ -232,19 +361,74 @@ Refocusing (focus breathing shifts magnification on many lenses) · zoom or work
 change · capture resolution change (now caught) · **chip reseating or replacement** — the camera
 staying put does not mean the array does, and this will happen every time a chip is swapped.
 
-## Next: first run on the instrument PC
+## Next: the first *valid* armed run
 
-Nothing here has touched hardware. Suggested order:
+Steps 1–3 below were completed on 2026-08-10 (ten dry runs, `chip-id trial01`); the camera,
+registration and detection paths all work against real hardware. Step 4 was attempted sixteen
+times and never passed the voltage gate.
 
-1. `python camera.py` — confirm the camera opens and print the frame size. Divide width by 128
-   for px/electrode.
-2. `--simulate` on the instrument PC, to confirm the environment.
-3. **Dry run with the real camera**, no `--arm`: exercises camera, registration, detector,
-   recorder and the live window without energising anything.
-4. Live: add `--arm`.
+### Prerequisite — resolve the voltage fault
 
-The four chip corners are needed for `--corners "x,y;x,y;x,y;x,y"` (TL;TR;BR;BL). Expect the
-first live runs to need threshold tuning — that is what they are for.
+**Do not run armed until phase 0b reports 45/45/45 within ±2 V.** Rail 3 reading 0 V on every
+attempt looks like a connection or supply fault, not noise. If phase 0b reports a mismatch, answer
+**no**. Confirming past it is what makes the results uninterpretable, and it is the trap the
+2026-08-10 session fell into.
 
-Still deferred: electrode pitch (⏰ before Priority 3), electrical/percentage scoring (§1.6),
-the ML model itself, automatic degradation learning.
+### Then
+
+```bash
+# 1. dry run, real camera, re-pick corners
+.venv/Scripts/python.exe -m chiphealth.run_health \
+    --chip-id trial01 --camera 0 --frame-size 1920x1080
+
+# 2. armed, once the dry run looks right and the voltage gate passes
+.venv/Scripts/python.exe -m chiphealth.run_health \
+    --chip-id trial01 --arm --camera 0 --frame-size 1920x1080 \
+    --step-delay 0.5 --axes h
+
+# if the rails still do not reach 45V, watch them ramp:
+.venv/Scripts/python.exe -m chiphealth.run_health \
+    --chip-id trial01 --arm --camera 0 --volt-poll --volt-settle 3.0
+```
+
+`--volt-poll` prints an `InquireVolt` reading every 0.25 s after `SetVolt`. Rising values mean the
+supply needs longer — raise `--volt-settle`. Values flat at 16/15/0 mean it has stopped short, and
+the problem is upstream of the software.
+
+Re-pick the corners rather than passing `--reuse-calibration`: the cached calibration is from
+2026-08-10 and chip reseating invalidates it even when the camera has not moved. Keep
+`--step-delay 0.5`; do not repeat the 0.05 used on 2026-08-10.
+
+**Expect** ~1802 coarse frames ≈ 15 min of delay alone, plus camera and analysis time, then a fine
+pass of roughly 2 min. Operator prompts at: voltage confirm (0b), load the substance (phase 1,
+re-asks up to 3×), focus check (phase 2), and top-up if the droplet shrinks.
+
+**Watch for**
+
+- **Phase 0b** — the whole run's validity rests on this one answer.
+- **Phase 2 registration** — centroid error and area ratio. Large error means the corners are
+  wrong; abort and re-pick rather than sweeping on a bad frame.
+- **`primary_area`** near 400 for a 20×20 window. Drifting toward 200 means liquid loss, and the
+  top-up prompt should fire on its own.
+- **`residue` with severity in the hundreds** — that is the droplet being left behind, not an
+  electrode fault. If it recurs with the voltage good and the delay at 0.5 s, then the transport
+  pattern genuinely was not the cause and the next place to look is elsewhere.
+- **`no_movement` clusters** early in band 0 — the same reading.
+- The timeline should alternate `grow`/`release` throughout, with **no `travel` frames**. A
+  `travel` frame means the caterpillar path was bypassed.
+
+Expect the first valid runs to need threshold tuning — that is what they are for, and `rescore.py`
+re-scores them offline afterwards, so a run with good voltage is worth keeping even if its verdicts
+need retuning.
+
+## Still deferred
+
+- **Plate gap** ⏰ — unmeasured, so `droplet_volume_nl()` returns `None` and volumes are
+  unreportable. Needed before Priority 2 can state results in nanolitres
+  (`spec/objectives.md` §2.4 q3).
+- Electrical / percentage scoring — no known path with the current hardware (`objectives.md` §1.6).
+- The ML model itself, and automatic degradation learning.
+- Mocking cv2 in the two environment-dependent picker tests.
+
+**Electrode pitch is no longer deferred** — resolved 2026-08-10 at 246.48 µm, in
+`ChipConfig.pitch_um`.

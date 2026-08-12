@@ -1,12 +1,25 @@
 # Acxchip — objectives and prioritized roadmap
 
-**Status:** plan only. No code has been written and none will be until each item below is
-individually approved. Authored 2026-08-06 from researcher-stated priorities.
+**Status:** Priority 1 is **built** and awaiting its first valid armed run; Priority 2 (droplet
+size) is not started. Authored 2026-08-06 from researcher-stated priorities. See §6 for what is
+and is not done.
+
+> **⚠ RENUMBERED 2026-08-12.** The original Priority 2 — axis movement via `MCDLL_NET.dll` — has
+> been **dropped as an active priority** by researcher decision. Minimum-size droplet splitting,
+> previously Priority 3, is now **Priority 2**; "everything else", previously Priority 4, is now
+> Priority 3. The axis material is **not deleted** — it is preserved verbatim in **Appendix A**,
+> along with why it was deferred and what would justify reopening it. The underlying reverse
+> engineering lives in `workspace/analysis.md` §13, §15, §21 and §22 and is unaffected.
+>
+> Rationale recorded at the decision: the axis work produces *honest error classification*, not
+> reliability — it does not fix the ~56% init failure rate — and nothing in the current or planned
+> work moves the stage. The claimed dependency of droplet splitting on the axis was never
+> justified anywhere in this document; see §2.1.
 
 **Relationship to `spec/design.md`:** `design.md` describes *architecture* (layers, module
 structure, signatures). This document describes *priority, sequence, and scope*. Where the two
 disagree, this document wins and the design doc is amended before that piece is built.
-Deltas to `design.md` created by this document are listed in §6.
+Deltas to `design.md` created by this document are listed in §5.
 
 **Relationship to `workspace/analysis.md`:** every claim below about vendor DLL capability is
 sourced to a section of the analysis log. Nothing here is new reverse engineering.
@@ -72,7 +85,7 @@ comparable to earlier runs — which matters for the longitudinal tracking in q1
 2. No code until you approve.
 3. Before I begin *designing* or *creating* any individual script, I stop and ask you explicitly.
    One script at a time, in priority order. Not batched.
-4. Approval of Priority 1 is not approval of Priority 2.
+4. Approval of one priority is not approval of the next.
 
 ---
 
@@ -336,79 +349,28 @@ is online-vs-offline, not camera-vs-actuation.
 | Vendor camera / ONNX detectors (§24, §27) | — | 🚫 excluded by policy |
 
 ---
-
-## 2. PRIORITY 2 — Axis movement, with real error reporting
-
-**Goal.** Real axis control via direct ctypes to `MCDLL_NET.dll`, with error reporting that is
-honest about the known ~56% init failure rate.
-
-Starts only after Priority 1 is approved *and* built.
-
-### 2.1 What analysis already established
-
-- `MCDLL_NET.dll` is an off-the-shelf Ethernet motion SDK, 232 exports, of which the vendor app
-  uses **13** (§15). Those 13 are the binding surface, listed in `design.md` §5.2. No shim needed.
-- The transport is **raw Ethernet via WinPcap**: `MCDLL_NET.dll` → `wpcap.dll` → `Packet.dll`
-  (§15.1). `_Net` means Ethernet, not .NET. The NPF driver must be installed and the process needs
-  rights to open an adapter.
-- The failure signature in the logs is `MCF_Open_Net` → "Failed to Open the Axis", **250 of 442
-  attempts** (§13).
-- Four disassembly-confirmed fragilities give a candidate mechanism (§15.4): no BPF filter is ever
-  installed, so the promiscuous receive returns whatever frame arrives first; the receive is a
-  single unretried `pcap_next_ex`; `to_ms=-1` is undocumented in WinPcap; and adapter identity is
-  **positional** in an unstable enumeration order, capped at 16 adapters.
-- The retry-3-times logic is in the **EXE**, not the DLL (§21) — so we get no retry for free and
-  must implement our own.
-- `AxisCache.dat` is all zeros except two `0x09090909` filler values (§22), consistent with the
-  axis never having been successfully taught on this machine.
-
-### 2.2 What "clean, real error reporting" means here
-
-The 56% number is why this priority exists, so the error model is the feature, not decoration.
-Failures must be **separated by cause**, because they have different fixes:
-
-- **Environmental** — NPF driver absent/stopped, no adapter permission, no adapter found. Not a
-  device fault. Must say so, and say what to do.
-- **Discovery** — the §15.3 loop walked every adapter and none answered. Distinguish "wrong
-  adapter picked" from "controller not responding".
-- **Device** — adapter opened, controller answered, motion refused.
-- **Unknown** — reported as unknown. Never rounded to a device fault.
-
-Every failure carries which of the 13 vendor calls failed, its raw return code, and the adapter
-context — not a bare `False`, which is what the current scripts would give you.
-
-### 2.3 A testable diagnostic, offered but not assumed
-
-§15.4 ends in an explicit, **unconfirmed** prediction: if the mechanism is promiscuous-receive
-contention, the failure rate should track background broadcast/multicast volume on the axis NIC
-and should drop sharply on a dedicated point-to-point link. Nothing has been observed running —
-this is inference from disassembly only.
-
-I can build a small diagnostic that measures this rather than assuming it. Whether that is worth
-your time is your call; I will ask at the Priority 2 gate. Marking it clearly: **hypothesis, not
-finding.**
-
-### 2.4 Open questions for Priority 2 (not needed yet — asked at the gate)
-
-- Has the axis ever been homed/taught successfully on this machine? §22 suggests not.
-- Is the axis on a dedicated NIC or a shared network?
-- Which axes are physically present and what are their travel limits? No axis card or adapter
-  field exists in `Config.ini` (§21), so this has to come from you.
+## 2. PRIORITY 2 — Minimum-size droplet splitting
 
 ---
 
-## 3. PRIORITY 3 — Minimum-size droplet splitting
+
+> Renumbered from Priority 3 on 2026-08-12. Content otherwise unchanged except where marked.
 
 **Goal.** A dedicated script for splitting a droplet as small as possible, beyond what the current
 scripts achieve.
 
-Starts only after Priorities 1 and 2 are approved and built.
+Starts only after Priority 1 is approved *and* built.
 
-### 3.1 Why this depends on Priority 1
+> **Dependency corrected 2026-08-12.** This previously read "after Priorities 1 and 2". The
+> dependency on the axis work was **never justified anywhere in this document** — §2.1 below
+> argues only the Priority 1 dependency, which is real. Droplet splitting is electrode actuation
+> plus optical measurement; it does not move the stage. The axis is now Appendix A.
+
+### 2.1 Why this depends on Priority 1
 
 "As small as possible" is a measurement claim. Without calibrated optical measurement you cannot
 tell a genuinely smaller droplet from a differently-lit one. The px → electrode calibration and
-the detection path built in Priority 1 are what make Priority 3 falsifiable. This is the main
+the detection path built in Priority 1 are what make Priority 2 falsifiable. This is the main
 reason the ordering you chose works.
 
 > ✅ **ELECTRODE PITCH RESOLVED 2026-08-10 — 246.48 µm.** The reminder owed here has been
@@ -447,7 +409,7 @@ reason the ordering you chose works.
 > The researcher noted 2026-08-10 that no confident measurement exists yet. Do not wire any of
 > these in.
 
-### 3.2 Starting point in the existing code
+### 2.2 Starting point in the existing code
 
 `1pixsplit.py` (283 lines) already encodes a real two-stage strategy: stretch, pattern into two
 pieces in one `ActivateElec` call, then translate with width pinching (10 → 3 columns), reaching a
@@ -456,7 +418,7 @@ constraint documented in that file's header — *piece height must match the dro
 prior art we keep, not rediscover. New work starts from what these established and pushes the
 floor down; it does not restart from zero.
 
-### 3.3 The capability ceiling to be honest about
+### 2.3 The capability ceiling to be honest about
 
 Analysis §16 compared `DLLTest.dll`'s 7 Python-facing exports against
 `MicrofluidicsInterFace.dll`'s 57. Python has **no frame control, no timing control, no polarity
@@ -464,7 +426,7 @@ control, no frequency control, and no chip-type selection.** For fine droplet ma
 are exactly the knobs that matter: actuation timing and waveform are standard levers for
 controlling splitting and satellite formation in AM-DMF.
 
-So the honest statement is: **Priority 3 will push the floor down using geometry and sequencing
+So the honest statement is: **Priority 2 will push the floor down using geometry and sequencing
 alone, and there may be a hard limit that only the shim can move.** I will not know where that
 limit is until we measure. If we hit it, that becomes concrete evidence for answering
 `design.md` §9 question 1 — which is a better basis for that decision than the guess available
@@ -474,11 +436,52 @@ Also relevant: `SendElectrify` has an overload taking `QVector<QRect>`, the clos
 the `.Acx` 9-field drop record (§16, §9-of-analysis). The mapping is **unproven** and stays
 unproven until someone verifies it.
 
+### 2.4 Open questions — must be answered before this is designed
+
+**Added 2026-08-12.** This priority never had an open-questions section, unlike §1.4 and the old
+§2.4 (now A.4). These were surfaced in discussion but were not written down anywhere, which is
+exactly how scoping questions get lost. Recorded now.
+
+1. **What is the actual goal — a 1×1 droplet, or 1-electrode positioning precision?**
+   **UNANSWERED.** These are different deliverables with different success criteria, and the
+   document has been quietly assuming the first: §2.1's table labels 1×1 "the target" without
+   anyone having decided that. *Smallest droplet* is a volume/footprint claim, measured as area
+   and bounded by surface tension and the missing waveform control (§2.3). *Positioning precision*
+   is a control claim — can a droplet of whatever size be placed on a named electrode and stay
+   there — measured as centroid error, and largely independent of how small the droplet is. A
+   script optimised for one is not the script for the other. Needs a decision before design.
+
+2. **Electrode pitch — ✅ RESOLVED 2026-08-10 at 246.48 µm.** See the box in §2.1. This was the
+   reminder obligation this section owed, and it has been discharged. In `ChipConfig.pitch_um`.
+
+3. **Plate gap — ⏰ STILL OPEN, and it is the one that blocks reporting volumes.**
+   `ChipConfig.gap_um` is `None`, `droplet_volume_nl()` returns `None`, and a test enforces both.
+   Footprint follows from the pitch; volume does not, because a droplet is a slab and without its
+   thickness any figure is invented. If the deliverable is stated in nanolitres rather than in
+   electrodes or mm², this must be measured first. Answering question 1 as "positioning precision"
+   would make this moot.
+
+4. **Is the current optical resolution sufficient to measure the target? UNANSWERED, and cheap to
+   check.** From the recorded calibration (`calibration.json`, 2026-08-10) one electrode is
+   **7.65 × 7.16 px**. A 1×1 droplet is therefore about **7 px across, ~55 px in area**, with a
+   contour boundary a pixel or two wide. That may or may not support a claim like "smaller than
+   `1pixsplit.py`'s 5×3". Pull a still from the next dry run, measure the smallest droplet you can
+   currently make, and see. If the answer is no, the routes are physically repositioning the
+   camera for higher magnification, or revisiting the §0.2 vendor-camera exclusion — the
+   instrument's Hi-mag camera is on the motion stage described in Appendix A. **This is the only
+   identified mechanism by which the deferred axis work could become relevant again.**
+
+5. **Where is the hard floor, and is it the shim?** Not answerable in advance; §2.3 is explicit
+   that this is what the work is for. Recorded so the answer is captured when it arrives.
+
 ---
 
-## 4. PRIORITY 4 — Everything else
+## 3. PRIORITY 3 — Everything else
 
-In whatever order makes sense once 1–3 are done. Recorded here so nothing is lost, not scheduled.
+> Renumbered from Priority 4 on 2026-08-12.
+
+In whatever order makes sense once 1–2 are done. Recorded here so nothing is lost, not scheduled.
+The deferred axis work (Appendix A) also lands here if it is ever reopened.
 
 | Item | Gate | Source |
 |---|---|---|
@@ -486,69 +489,186 @@ In whatever order makes sense once 1–3 are done. Recorded here so nothing is l
 | ⚠ `SendSetPID` argument order | **Unresolved.** 4 ints, 3 format slots. Must ship raising `NotImplementedError`. Wrong PID routing on a 4-zone heater is a physical-safety issue, not a bug. | §10, `design.md` §5.4 |
 | Light system | ⛔ shim required | §28 |
 | Magnet | ⛔ shim required | §28 |
-| L3 choreography (merge, mix, graveyard, `.Acx` I/O) | Follows from P1/P3 | `design.md` §5 |
+| L3 choreography (merge, mix, graveyard, `.Acx` I/O) | Follows from P1/P2 | `design.md` §5 |
 | L4 autonomous campaign (replaces `masterscript3.py`) | Last | `design.md` §5 |
+| Axis movement (was Priority 2) | ⏸ **Deferred 2026-08-12.** Preserved in Appendix A. | §13, §15, §21, §22 |
 | Path planning | Not adopted. `MultiAgentPathPlanning.dll` is managed .NET SIPP-MAPF (§26); reachable only via a .NET bridge. Note `SafetyDistance` — minimum droplet separation — as a concept worth borrowing even if the DLL is not. | §5, §26 |
 
 ---
 
-## 5. Sequence and gates
+## 4. Sequence and gates
 
 ```
   [ this document ]  ──▶  YOU APPROVE
           │
           ▼
-  P1  gate: I ask before designing ──▶ design ──▶ gate: I ask before writing ──▶ build
-          │                                                                        │
-          ▼                                                             YOU APPROVE RESULT
-  P2  gate: I ask before designing ──▶ ... (same shape)
+  P1  gate: ask before designing ──▶ design ──▶ gate: ask before writing ──▶ build
+      ✅ BUILT 2026-08-07 · ⏳ awaiting a valid armed run (see p1_build_status.md)
           │
           ▼
-  P3  gate: I ask before designing ──▶ ...
+  P2  minimum-size droplet splitting  (was P3)
+      gate: ask before designing ──▶ ... (same shape).  NOT STARTED.
           │
           ▼
-  P4  re-plan at that point; do not assume this ordering survives P1–P3
+  P3  everything else (was P4)
+      re-plan at that point; do not assume this ordering survives P1–P2
+```
+
+```
+  ⏸ DEFERRED — Appendix A: axis movement (was P2). Dropped 2026-08-12.
+     Not a dependency of P2 or P3. Reopen only on the trigger in §2.4 q4.
 ```
 
 Nothing in P2 begins while P1 is open. Each gate is a separate ask.
 
 ---
 
-## 6. Deltas this document creates in `spec/design.md`
+## 5. Deltas this document creates in `spec/design.md`
 
-Recorded, not yet applied. I will amend `design.md` on your say-so.
+Recorded 2026-08-06. **Applied to `design.md` 2026-08-12** — see the amendment note at the top of
+that file. Kept here as the record of what changed and why.
 
 1. **§5.3 `l1_primitives/camera.py` (`MvCameraControl.dll` binding) — CANCELLED.** Replaced by a
    module modelled on `project/camera.py` and wired to your camera (§0.2 above).
 2. **§6 `CameraPair` (HighSerial / LowSerial Hikrobot pair) — CANCELLED.** Same reason.
 3. **§9 question 4 (camera) — ANSWERED.** Your camera, your `camera.py` structure, no vendor
    camera dependency.
-4. **§9 question 1 (shim feasibility) — DEFERRED, and cheaper to defer than it looked.** P1, P2,
-   and P3 are all designed to need no native build. The shim decision can now be made later, with
-   evidence from P3 about whether the missing timing/polarity control is actually the binding
-   constraint on droplet size.
+4. **§9 question 1 (shim feasibility) — DEFERRED, and cheaper to defer than it looked.** Every
+   priority is designed to need no native build. The shim decision can now be made later, with
+   evidence from P2 (droplet size) about whether the missing timing/polarity control is actually
+   the binding constraint on droplet size.
 5. **§9 question 2 (scope of first release) — EFFECTIVELY ANSWERED** by the priority order: the
-   no-native-build subset, delivered as P1 → P2 → P3.
+   no-native-build subset, delivered as P1 → P2. *(Updated 2026-08-12: was "P1 → P2 → P3" when
+   the axis was P2.)*
 6. **§9 question 3 (legacy scripts) — STILL OPEN.** §0.1 commits to improving on them rather than
    wrapping them, but whether `project/`'s 13 scripts are left in place, ported, or deprecated is
    still your decision.
-7. **§9 question 5 (arming/safety default) — STILL OPEN and now urgent**, because P1's health
-   sweep energises broadly across the chip. This is the one §9 question that blocks P1.
+7. **§9 question 5 (arming/safety default) — ✅ CLOSED 2026-08-06 and built.** Dry-run is the
+   default; `--arm` / `ACXCHIP_ARM=1` arms a session. See `chiphealth/actuation.py`.
 8. **§10 "Proposed first step: L0 + L1 axis only" — SUPERSEDED.** Your priorities put the
-   electrode/health script first, not the axis.
+   electrode/health script first, not the axis. As of 2026-08-12 the axis is deferred entirely
+   (Appendix A), so §10 is dead rather than merely reordered.
 
 ---
 
-## 7. What has NOT been done
+## 6. Status — what is and is not done
 
-- No code written. **This includes the approved held-open camera change** — approval received
-  2026-08-06, implementation deferred to the P1 build (§0.2).
-- No script designed. This document states *what* each piece is for and what it must respect; it
-  deliberately stops short of designing Priority 1.
-- `spec/design.md` not modified — deltas in §6 are recorded, not applied.
-- `inputs/research_plan.md` untouched, per the standing hold.
+**Updated 2026-08-12.** This section previously read "No code written"; that has been true of
+nothing since 2026-08-07.
 
-**Status 2026-08-06:** all §1.4 questions answered; nothing blocks the Priority 1 design.
+### Done
 
-**Next step:** waiting on your go-ahead to begin *designing* Priority 1. I will ask once more
-before writing any code.
+- **Priority 1 is built.** Nine modules under `chiphealth/` plus `rescore.py` for offline
+  re-scoring. **285 tests, 283 passing** — the 2 failures are environment-dependent (they assert
+  OpenCV is absent while it is installed). Detail in `spec/p1_build_status.md`.
+- All §1.4 questions answered 2026-08-06.
+- The held-open camera change (§0.2) — implemented as part of the P1 build, as scheduled.
+- Autofocus off, recorded per run (§0.2).
+- Arming gate, dry-run default (`design.md` §9 q5).
+- Electrode pitch resolved at 246.48 µm (§2.1), discharging the reminder owed to droplet-size work.
+- `spec/design.md` amended with the §5 deltas.
+
+### Not done
+
+- **No valid armed run yet.** Sixteen armed attempts on 2026-08-10; every one that recorded a
+  voltage check **failed** it, with rail 3 reading 0 V against a commanded 45 V every time. Until
+  that is resolved no armed run's verdicts are interpretable. This is the single blocker on P1.
+- Priority 2 (droplet size) not designed or started. Its §2.4 questions 1, 3 and 4 are open.
+- The plate gap is unmeasured, so droplet volumes stay unreportable (§2.4 q3).
+- `design.md` §9 q3 (what happens to the 13 legacy scripts) still undecided.
+- No ground-truth bad region exists on this chip, so detector thresholds remain provisional and
+  the first valid armed runs are threshold calibration rather than measurement.
+
+**Next step:** resolve the voltage fault, then a dry run, then a valid armed run. After that,
+the Priority 2 gate — starting with §2.4 question 1, which decides what the deliverable even is.
+
+---
+
+# Appendix A — Axis movement (deferred)
+
+> **⏸ DEFERRED 2026-08-12 by researcher decision.** This was Priority 2. It is **not deleted** and
+> **not a dependency** of anything now active.
+>
+> **Why it was dropped.** What this work produces is *honest error classification* — separating
+> environmental from discovery from device failures — not reliability. It does not fix the ~56%
+> init failure rate. Nothing in Priority 1 or Priority 2 moves the stage: P1's calibration model
+> assumes a stationary, manually-focused camera with hand-picked corners, and droplet splitting is
+> electrode actuation plus optical measurement. The claimed dependency of droplet work on the axis
+> was never justified in this document.
+>
+> **What it costs to leave.** Little, and it is reversible. The expensive part — 232 exports
+> narrowed to the 13 the app uses, transport identified as raw Ethernet over WinPcap, a named and
+> falsifiable failure mechanism — is complete and written down in `workspace/analysis.md` §13,
+> §15, §21 and §22. That is static analysis of a DLL that will not change; picking it back up
+> costs re-reading, not re-deriving.
+>
+> **What would justify reopening it.** One identified trigger: if §2.4 question 4 resolves that
+> the current optical resolution cannot measure the droplet sizes Priority 2 needs to claim, the
+> instrument's Hi-mag camera becomes relevant — and it is mounted on this motion stage. That
+> would also require revisiting the §0.2 vendor-camera exclusion, and physically repositioning
+> the researcher's own camera is the cheaper alternative to try first.
+>
+> **Cheapest test before any code.** If the §15.4 mechanism is right, moving the controller to a
+> dedicated point-to-point NIC should drop the failure rate sharply. That is a cabling change.
+>
+> Sections A.1–A.4 below are the original Priority 2 material. **A.1 and A.2 are verbatim.** A.3
+> keeps its original content and gains the cabling-test note above; A.4 keeps its three questions
+> unchanged but is retitled — it used to say the questions would be "asked at the gate", and there
+> is no longer a gate to ask them at.
+
+**Goal (as originally stated).** Real axis control via direct ctypes to `MCDLL_NET.dll`, with
+error reporting that is honest about the known ~56% init failure rate.
+
+## A.1 What analysis already established
+
+- `MCDLL_NET.dll` is an off-the-shelf Ethernet motion SDK, 232 exports, of which the vendor app
+  uses **13** (§15). Those 13 are the binding surface, listed in `design.md` §5.2. No shim needed.
+- The transport is **raw Ethernet via WinPcap**: `MCDLL_NET.dll` → `wpcap.dll` → `Packet.dll`
+  (§15.1). `_Net` means Ethernet, not .NET. The NPF driver must be installed and the process needs
+  rights to open an adapter.
+- The failure signature in the logs is `MCF_Open_Net` → "Failed to Open the Axis", **250 of 442
+  attempts** (§13).
+- Four disassembly-confirmed fragilities give a candidate mechanism (§15.4): no BPF filter is ever
+  installed, so the promiscuous receive returns whatever frame arrives first; the receive is a
+  single unretried `pcap_next_ex`; `to_ms=-1` is undocumented in WinPcap; and adapter identity is
+  **positional** in an unstable enumeration order, capped at 16 adapters.
+- The retry-3-times logic is in the **EXE**, not the DLL (§21) — so we get no retry for free and
+  must implement our own.
+- `AxisCache.dat` is all zeros except two `0x09090909` filler values (§22), consistent with the
+  axis never having been successfully taught on this machine.
+
+## A.2 What "clean, real error reporting" means here
+
+The 56% number is why this priority exists, so the error model is the feature, not decoration.
+Failures must be **separated by cause**, because they have different fixes:
+
+- **Environmental** — NPF driver absent/stopped, no adapter permission, no adapter found. Not a
+  device fault. Must say so, and say what to do.
+- **Discovery** — the §15.3 loop walked every adapter and none answered. Distinguish "wrong
+  adapter picked" from "controller not responding".
+- **Device** — adapter opened, controller answered, motion refused.
+- **Unknown** — reported as unknown. Never rounded to a device fault.
+
+Every failure carries which of the 13 vendor calls failed, its raw return code, and the adapter
+context — not a bare `False`, which is what the current scripts would give you.
+
+## A.3 A testable diagnostic, offered but not assumed
+
+§15.4 ends in an explicit, **unconfirmed** prediction: if the mechanism is promiscuous-receive
+contention, the failure rate should track background broadcast/multicast volume on the axis NIC
+and should drop sharply on a dedicated point-to-point link. Nothing has been observed running —
+this is inference from disassembly only.
+
+A small diagnostic could measure this rather than assume it. Marking it clearly: **hypothesis, not
+finding.** Note that if the mechanism *is* promiscuous-receive contention, the cheapest test is not
+software at all — move the controller to a dedicated point-to-point NIC and see whether the failure
+rate drops. That is a cabling change, and it is worth trying before any of this work is reopened.
+
+## A.4 Questions that were never answered
+
+Left open when this was deferred. They are not needed unless the work restarts.
+
+- Has the axis ever been homed/taught successfully on this machine? §22 suggests not.
+- Is the axis on a dedicated NIC or a shared network?
+- Which axes are physically present and what are their travel limits? No axis card or adapter
+  field exists in `Config.ini` (§21), so this has to come from you.
