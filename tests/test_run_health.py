@@ -1133,3 +1133,131 @@ class TestTopUpFollowsDropletCheck(GateCase):
         finally:
             tmp.cleanup()
         self.assertIn("Top-up prompts are disabled", note)
+
+
+class TestStepDelayGuard(unittest.TestCase):
+    """Fast timing is safe in dry-run and gated when armed.
+
+    Dry-run energises nothing -- ChipController.activate skips ActivateElec and
+    open() skips SetPower/SetVolt -- so the reflow constraint that makes 0.05s
+    dangerous with liquid on the chip does not exist. The floor is what stops a
+    fast dry-run value reaching an armed run via shell history.
+    """
+
+    def cfg(self, delay, armed):
+        from chiphealth.config import RunConfig
+        c = RunConfig()
+        c.chip_id = "t"
+        c.armed = armed
+        c.sweep.step_delay_s = delay
+        return c
+
+    def check(self, delay, armed, allow=False):
+        from chiphealth.run_health import check_step_delay
+        return check_step_delay(self.cfg(delay, armed), allow_fast_armed=allow)
+
+    def test_dry_run_has_no_floor_at_all(self):
+        for delay in (0.0, 0.001, 0.05):
+            with self.subTest(delay=delay):
+                self.assertIsNone(self.check(delay, armed=False))
+
+    def test_armed_below_the_floor_is_refused(self):
+        res = self.check(0.05, armed=True)
+        self.assertFalse(res.ok)
+        self.assertIn("0.25", res.message)
+        self.assertIn("2026-08-10", res.message)
+
+    def test_armed_at_the_default_is_silent(self):
+        self.assertIsNone(self.check(0.5, armed=True))
+
+    def test_armed_at_the_floor_is_allowed_but_recorded(self):
+        res = self.check(0.25, armed=True)
+        self.assertTrue(res.ok)
+        self.assertIsNotNone(res.note)
+        self.assertIn("NON-DEFAULT TIMING", res.note)
+        # 0.25 per frame x 2 frames = the 0.5s per electrode legacy gives.
+        self.assertIn("0.50s", res.note)
+
+    def test_the_override_permits_a_fast_armed_run(self):
+        res = self.check(0.05, armed=True, allow=True)
+        self.assertTrue(res.ok)
+        self.assertIn("NON-DEFAULT TIMING", res.note)
+
+    def test_a_fast_armed_run_is_refused_with_a_nonzero_exit(self):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            rc = main(["--chip-id", "c", "--simulate", "--arm", "--step-delay",
+                       "0.05", "--runs-root", tmp.name, "--headless",
+                       "--non-interactive"])
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+        self.assertEqual(rc, 2)
+
+    def test_a_fast_dry_run_is_not_refused(self):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--chip-id", "c", "--simulate", "--step-delay", "0",
+                           "--runs-root", tmp.name, "--headless",
+                           "--non-interactive"])
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+        self.assertEqual(rc, 0)
+
+
+class TestBandsFlag(unittest.TestCase):
+    """--bands truncates the sweep and says so in the artifact."""
+
+    def run_with(self, *extra):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["--chip-id", "b", "--simulate", "--step-delay", "0",
+                           "--runs-root", tmp.name, "--headless",
+                           "--non-interactive", *extra])
+            d = next(Path(tmp.name).iterdir())
+            meta = json.loads((d / "run.json").read_text())
+            cov = json.loads((d / "coverage.json").read_text())
+            steps = len(rescore.load_jsonl(d / "timeline.jsonl"))
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+        return rc, meta, cov, steps
+
+    def test_one_band_runs_far_fewer_steps(self):
+        _, _, _, few = self.run_with("--bands", "1")
+        _, _, _, all_ = self.run_with()
+        self.assertLess(few, all_ / 3)
+
+    def test_the_partial_sweep_is_named_in_the_notes(self):
+        _, meta, _, _ = self.run_with("--bands", "1")
+        note = next((n for n in meta["notes"] if "PARTIAL SWEEP" in n), None)
+        self.assertIsNotNone(note, meta["notes"])
+        self.assertIn("1 of 7 bands", note)
+        self.assertIn("NOT a coverage result", note)
+
+    def test_untested_rows_are_reported_not_hidden(self):
+        _, _, cov, _ = self.run_with("--bands", "1")
+        self.assertEqual(cov["never_covered_rows"], list(range(21, 129)))
+
+    def test_a_full_run_carries_no_partial_note(self):
+        _, meta, cov, _ = self.run_with()
+        self.assertFalse(any("PARTIAL SWEEP" in n for n in meta["notes"]))
+        self.assertEqual(cov["never_covered_rows"], [])
+
+    def test_zero_bands_is_refused_before_a_run_dir_is_made(self):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            rc = main(["--chip-id", "b", "--simulate", "--bands", "0",
+                       "--runs-root", tmp.name, "--headless", "--non-interactive"])
+            self.assertEqual(rc, 2)
+            self.assertEqual(list(Path(tmp.name).iterdir()), [])
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()

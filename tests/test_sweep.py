@@ -331,3 +331,66 @@ class TestVertical(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPartialSweep(unittest.TestCase):
+    """--bands: a short traversal for step-delay timing work.
+
+    Deliberately incomplete. The value of the flag is that the run says so.
+    """
+
+    def plan(self, n=None):
+        return sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL,
+                                     max_bands=n)
+
+    def test_one_band_is_a_prefix_of_the_full_sweep(self):
+        full, part = self.plan(), self.plan(1)
+        self.assertEqual([s.to_dict() for s in part],
+                         [s.to_dict() for s in full[:len(part)]])
+
+    def test_each_extra_band_only_adds(self):
+        prev = 0
+        for n in range(1, 8):
+            cur = len(self.plan(n))
+            self.assertGreater(cur, prev, f"band {n} added nothing")
+            prev = cur
+        self.assertEqual(prev, len(self.plan()))
+
+    def test_only_the_requested_bands_appear(self):
+        for n in (1, 3):
+            with self.subTest(bands=n):
+                self.assertEqual({s.band for s in self.plan(n)}, set(range(n)))
+
+    def test_one_band_is_a_small_fraction_of_the_run(self):
+        """The whole point: a ramp test at four delays must not cost an hour."""
+        self.assertLess(len(self.plan(1)) / len(self.plan()), 0.25)
+
+    def test_indices_stay_contiguous(self):
+        steps = self.plan(2)
+        self.assertEqual([s.idx for s in steps], list(range(len(steps))))
+
+    def test_a_partial_sweep_leaves_most_of_the_chip_untested(self):
+        missed = sweep.untested_electrodes(self.plan(1), ROWS, COLS)
+        self.assertGreater(len(missed), ROWS * COLS // 2)
+
+    def test_uncovered_rows_reports_the_truncation(self):
+        rows = sweep.uncovered_rows(ROWS, WIN, 1, max_bands=1)
+        self.assertEqual(rows, list(range(WIN + 1, ROWS + 1)))
+        self.assertEqual(sweep.uncovered_rows(ROWS, WIN, 1), [])
+
+    def test_the_full_sweep_is_unchanged_by_the_new_parameter(self):
+        self.assertEqual([s.to_dict() for s in self.plan(None)],
+                         [s.to_dict() for s in sweep.plan_serpentine(
+                             ROWS, COLS, WIN, WIN, START_ROW, START_COL)])
+
+    def test_zero_or_negative_bands_is_refused(self):
+        for n in (0, -1):
+            with self.subTest(bands=n), self.assertRaises(ValueError):
+                self.plan(n)
+
+    def test_vertical_honours_it_too(self):
+        part = sweep.plan_vertical(ROWS, COLS, WIN, WIN, START_ROW, START_COL,
+                                   max_bands=1)
+        full = sweep.plan_vertical(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
+        self.assertLess(len(part), len(full))
+        self.assertEqual({s.band for s in part}, {0})
