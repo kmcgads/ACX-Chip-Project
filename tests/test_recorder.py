@@ -195,7 +195,7 @@ class TestTimelineAndSummary(RecorderCase):
         self.assertEqual(self.rec.coverage.counts()[PASS], 3)
 
     def test_prompts_are_recorded_with_what_was_asked(self):
-        self.rec.log_prompt("Load 20x20 droplet at row 2, col 5", "loaded", 0.0)
+        self.rec.log_prompt("Load 20x20 droplet at row 5, col 10", "loaded", 0.0)
         self.rec.finalize()
         meta = json.loads(self.rec.paths.run_json.read_text())
         self.assertEqual(len(meta["prompts"]), 1)
@@ -246,3 +246,131 @@ class TestChipIdGuard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCodeVersion(unittest.TestCase):
+    """run.json has to say which code produced it.
+
+    schema_version and detector_version only change when someone remembers to
+    change them; the commit is exact. This artifact is meant to be read months
+    later, when there is no other way to answer the question.
+    """
+
+    def test_it_reports_a_commit_and_a_dirty_flag(self):
+        from chiphealth.recorder import code_version
+        v = code_version()
+        self.assertIn("commit", v)
+        self.assertIn("dirty", v)
+        if v["commit"] is not None:
+            self.assertRegex(v["commit"], r"^[0-9a-f]{40}$")
+            self.assertIsInstance(v["dirty"], bool)
+
+    def test_a_dirty_tree_says_so_loudly(self):
+        """A hash from a dirty tree names code the run did NOT use. Recording
+        it without the warning would be worse than recording nothing."""
+        from chiphealth.recorder import code_version
+        v = code_version()
+        if v.get("dirty"):
+            self.assertIn("UNCOMMITTED", v["note"])
+            self.assertIn("does NOT identify", v["note"])
+            self.assertTrue(v["dirty_files"])
+
+    def test_dirty_paths_are_not_mangled(self):
+        """Regression: a bare .strip() on the porcelain output ate the leading
+        space of the FIRST line only, so `[3:]` chopped a character off that one
+        path -- 'chiphealth/__init__.py' came back as 'hiphealth/__init__.py'.
+        Every entry keeps its two-column status field, so a reader can also tell
+        a modified tracked file from untracked noise."""
+        import subprocess
+        from chiphealth import recorder
+
+        class Out:
+            returncode = 0
+            stdout = (" M chiphealth/__init__.py\n"
+                      " M chiphealth/config.py\n"
+                      "?? .scratch/\n")
+
+        class Sha(Out):
+            stdout = "a" * 40 + "\n"
+
+        calls = []
+        real = subprocess.run
+
+        def fake(args, **kw):
+            calls.append(args)
+            return Sha() if "rev-parse" in args else Out()
+
+        subprocess.run = fake
+        try:
+            v = recorder.code_version()
+        finally:
+            subprocess.run = real
+        self.assertEqual(v["commit"], "a" * 40)
+        self.assertTrue(v["dirty"])
+        self.assertEqual(v["dirty_files"],
+                         [" M chiphealth/__init__.py",
+                          " M chiphealth/config.py",
+                          "?? .scratch/"])
+        # the path that used to lose its first character
+        self.assertTrue(any(l.endswith("chiphealth/__init__.py")
+                            for l in v["dirty_files"]))
+
+    def test_a_clean_tree_carries_no_warning(self):
+        import subprocess
+        from chiphealth import recorder
+
+        class Clean:
+            returncode = 0
+            stdout = ""
+
+        class Sha:
+            returncode = 0
+            stdout = "b" * 40 + "\n"
+
+        real = subprocess.run
+        subprocess.run = lambda args, **kw: (Sha() if "rev-parse" in args
+                                             else Clean())
+        try:
+            v = recorder.code_version()
+        finally:
+            subprocess.run = real
+        self.assertEqual(v["commit"], "b" * 40)
+        self.assertFalse(v["dirty"])
+        self.assertNotIn("note", v)
+        self.assertNotIn("dirty_files", v)
+
+    def test_it_never_raises_when_git_is_unavailable(self):
+        """Not a repo, no git installed, or a timeout must all degrade to an
+        explicit 'unknown', not a crash and not a missing key."""
+        import subprocess
+        from chiphealth import recorder
+
+        def boom(*a, **k):
+            raise FileNotFoundError("no git here")
+
+        real = subprocess.run
+        subprocess.run = boom
+        try:
+            v = recorder.code_version()
+        finally:
+            subprocess.run = real
+        self.assertIsNone(v["commit"])
+        self.assertIsNone(v["dirty"])
+        self.assertIn("no git commit available", v["note"])
+
+    def test_a_nonzero_git_exit_is_treated_as_unknown(self):
+        import subprocess
+        from chiphealth import recorder
+
+        class Fail:
+            returncode = 128
+            stdout = ""
+
+        real = subprocess.run
+        subprocess.run = lambda *a, **k: Fail()
+        try:
+            v = recorder.code_version()
+        finally:
+            subprocess.run = real
+        self.assertIsNone(v["commit"])
+        self.assertIn("not a", v["note"])

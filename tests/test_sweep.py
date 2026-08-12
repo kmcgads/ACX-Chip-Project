@@ -8,7 +8,7 @@ from chiphealth.sweep import AXIS_COL, AXIS_ROW
 # The real geometry, from spec/p1_chip_health_design.md.
 ROWS = COLS = 128
 WIN = 20
-START_ROW, START_COL = 2, 5
+START_ROW, START_COL = 5, 10   # moved off the edge electrodes 2026-08-12
 
 
 class TestBands(unittest.TestCase):
@@ -18,11 +18,15 @@ class TestBands(unittest.TestCase):
         self.assertEqual(sweep.plan_bands(ROWS, WIN),
                          [1, 21, 41, 61, 81, 101, 109])
 
-    def test_bands_from_the_load_row_leave_row_one_out(self):
-        """The old behaviour, kept reachable and pinned."""
+    def test_bands_from_the_load_row_leave_the_top_rows_out(self):
+        """The old behaviour, kept reachable and pinned.
+
+        Starting bands at the load row loses every row above it -- four of them
+        now that the droplet loads at row 5, where it used to be one.
+        """
         self.assertEqual(sweep.plan_bands(ROWS, WIN, START_ROW),
-                         [2, 22, 42, 62, 82, 102, 109])
-        self.assertEqual(sweep.uncovered_rows(ROWS, WIN, START_ROW), [1])
+                         [5, 25, 45, 65, 85, 105, 109])
+        self.assertEqual(sweep.uncovered_rows(ROWS, WIN, START_ROW), [1, 2, 3, 4])
 
     def test_final_band_is_clamped_not_dropped(self):
         """The last band overlaps rather than leaving the bottom edge untested."""
@@ -122,33 +126,42 @@ class TestSerpentine(unittest.TestCase):
         self.steps = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
 
     def test_step_count_and_cost(self):
-        # 1802 = 901 electrode-moves x 2 (grow + release), so the droplet is
+        # 1798 = 899 electrode-moves x 2 (grow + release), so the droplet is
         # never asked to release behind and grab ahead in the same instant.
-        self.assertEqual(len(self.steps), 1802)
-        self.assertAlmostEqual(sweep.total_duration_s(self.steps, 0.5), 901.0)
+        # Was 1802 when the droplet loaded at (2, 5); loading at (5, 10) costs
+        # 6 extra frames climbing to row 1 and saves 10 on a shorter prime.
+        self.assertEqual(len(self.steps), 1798)
+        self.assertAlmostEqual(sweep.total_duration_s(self.steps, 0.5), 899.0)
 
     def test_every_electrode_is_reached(self):
         """The whole point of the priming leg and the row-1 band start."""
         self.assertEqual(sweep.untested_electrodes(self.steps, ROWS, COLS), set())
 
-    def test_the_old_geometry_missed_448_electrodes(self):
+    def test_the_old_geometry_missed_732_electrodes(self):
         """Pins the regression the fix closed, so it cannot come back unnoticed.
 
-        Row 1 entirely (128), plus rows 2-21 x cols 5-20 (320) -- band 0 had no
-        preceding corner to fill in the columns its single direction misses.
+        Rows 1-4 entirely (512), plus rows 5-24 x cols 10-20 (220) -- band 0 has
+        no preceding corner to fill in the columns its single direction misses.
+
+        Both numbers moved with the load position on 2026-08-12: at (2, 5) this
+        was 448 = row 1 (128) + rows 2-21 x cols 5-20 (320). Loading four rows
+        further down loses four rows instead of one, which is precisely what
+        `first_band_row=1` exists to prevent.
         """
         old = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL,
                                     first_band_row=START_ROW, prime=False)
         missed = sweep.untested_electrodes(old, ROWS, COLS)
-        self.assertEqual(len(old), 1734)   # 867 moves x 2
-        self.assertEqual(len(missed), 448)
+        self.assertEqual(len(old), 1738)   # 869 moves x 2
+        self.assertEqual(len(missed), 732)
+        self.assertEqual(sorted({r for r, c in missed if c == 1}), [1, 2, 3, 4])
         self.assertEqual(len({c for r, c in missed if r == 1}), 128)
-        self.assertEqual(sorted({c for r, c in missed if r == 2}), list(range(5, 21)))
+        self.assertEqual(sorted({c for r, c in missed if r == 5}),
+                         list(range(10, 21)))
 
-    def test_the_fix_costs_34_steps(self):
+    def test_the_fix_costs_30_moves(self):
         old = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL,
                                     first_band_row=START_ROW, prime=False)
-        self.assertEqual(len(self.steps) - len(old), 68)   # 34 moves x 2
+        self.assertEqual(len(self.steps) - len(old), 60)   # 30 moves x 2
 
     def test_steps_alternate_grow_then_release(self):
         for a, b in zip(self.steps[::2], self.steps[1::2]):
@@ -183,12 +196,18 @@ class TestSerpentine(unittest.TestCase):
             prev = (s.row, s.col)
 
     def test_run_climbs_to_row_one_before_sweeping(self):
-        """The droplet loads at row 2; band 0 starts at row 1."""
+        """The droplet loads at row 5; band 0 starts at row 1."""
         first = self.steps[0]
         self.assertEqual(first.kind, sweep.KIND_GROW)
         self.assertEqual(first.axis, AXIS_ROW)
         self.assertEqual(first.direction, -1)
-        self.assertEqual(first.row, 1)
+        # A grow widens backwards without moving the origin's far edge, so the
+        # first frame's origin is one row above the load row, not row 1.
+        self.assertEqual(first.row, START_ROW - 1)
+        # It does reach row 1, and only then starts travelling in columns.
+        climb = [s for s in self.steps if s.axis == AXIS_ROW and s.direction == -1]
+        self.assertEqual(climb[-1].row, 1)
+        self.assertEqual(self.steps[len(climb)].axis, AXIS_COL)
 
     def test_band_zero_primes_out_and_back(self):
         """Right to col_min+w, back to col_min, then away -- the corner turn
@@ -226,10 +245,11 @@ class TestSerpentine(unittest.TestCase):
     def test_band_changes_are_row_moves(self):
         changes = [s for s in self.steps if s.axis == AXIS_ROW]
         self.assertTrue(all(s.axis == AXIS_ROW for s in changes))
-        # Exactly one goes upward: the initial climb from the load row to row 1.
-        # The single upward climb is a grow+release pair, so two steps.
-        self.assertEqual(sum(1 for s in changes if s.direction == -1), 2)
-        self.assertTrue(all(s.direction == +1 for s in changes[2:]))
+        # The only upward moves are the initial climb from the load row to
+        # row 1: 4 moves from row 5, each a grow+release pair, so 8 frames.
+        climb = 2 * (START_ROW - 1)
+        self.assertEqual(sum(1 for s in changes if s.direction == -1), climb)
+        self.assertTrue(all(s.direction == +1 for s in changes[climb:]))
 
 
 class TestEdges(unittest.TestCase):
@@ -317,10 +337,13 @@ class TestVertical(unittest.TestCase):
         self.assertEqual(sweep.untested_electrodes(vertical, ROWS, COLS), set())
 
     def test_vertical_step_count_differs_slightly_from_horizontal(self):
-        """Not a bug: the load position transposes to row 5, col 2, so the
-        climb to the first band is 4 steps instead of 1."""
+        """Not a bug: the load position transposes, so (5, 10) becomes a start
+        at row 10, col 5 and the climb to the first band is a different length
+        from the horizontal pass's."""
         vertical = sweep.plan_vertical(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
-        self.assertEqual(len(vertical), 1814)   # 907 moves x 2
+        self.assertEqual(len(vertical), 1818)   # 909 moves x 2
+        horizontal = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL)
+        self.assertNotEqual(len(vertical), len(horizontal))
 
     def test_both_axes_together_cost_roughly_double(self):
         h = sweep.plan_serpentine(ROWS, COLS, WIN, WIN, START_ROW, START_COL)

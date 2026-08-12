@@ -231,7 +231,7 @@ class TestRegistrationGuard(unittest.TestCase):
             # the supply is off.
             activations = [payload for name, payload in be.calls
                            if name == "ActivateElec"]
-            self.assertEqual(activations, [[(20, 20, 2, 5)], []])
+            self.assertEqual(activations, [[(20, 20, 5, 10)], []])
             self.assertEqual(activations[-1], [])
             self.assertEqual(be.frame, [])
             self.assertFalse(be.powered)
@@ -264,7 +264,7 @@ class TestRegistrationGuard(unittest.TestCase):
         stats, be, rec, tmp = self._run(simulate.SyntheticRig())
         try:
             self.assertFalse(stats.get("aborted"))
-            self.assertEqual(stats["steps"], 1802)
+            self.assertEqual(stats["steps"], 1798)
             self.assertEqual(stats["events"], 0)
         finally:
             tmp.cleanup()
@@ -411,7 +411,7 @@ class TestFrameSizeGuard(GateCase):
         finally:
             tmp.cleanup()
         self.assertFalse(stats.get("aborted"))
-        self.assertEqual(stats["steps"], 1802)
+        self.assertEqual(stats["steps"], 1798)
 
     def test_no_expected_size_means_no_check(self):
         run, be, rec, prompter, tmp = self._build(
@@ -506,7 +506,10 @@ class TestMissingRegistration(GateCase):
         stats, notes = self._no_corners_run(pick_corners=False)
         self.assertTrue(stats["aborted"])
         self.assertEqual(stats["steps"], 0)
-        message = next(n for n in notes if "registration" in n.lower())
+        # Match the abort message itself, not any note mentioning registration:
+        # a loose selector here silently latched onto an unrelated note the
+        # first time another one was added.
+        message = next(n for n in notes if n.startswith("No chip registration"))
         self.assertIn("--corners", message)
         self.assertIn("TL;TR;BR;BL", message)
         self.assertIn("corners_px", message)
@@ -557,7 +560,7 @@ class TestVoltageGate(GateCase):
             logging.disable(logging.NOTSET)
             tmp.cleanup()
         self.assertFalse(stats.get("aborted"))
-        self.assertEqual(stats["steps"], 1802)
+        self.assertEqual(stats["steps"], 1798)
 
     def test_mismatch_is_surfaced_to_the_operator_and_logged(self):
         run, be, rec, prompter, tmp = self._build([False])
@@ -606,7 +609,7 @@ class TestLoadGate(GateCase):
         self.assertIn("LOAD THE SUBSTANCE", instruction)
         self.assertIn("Silicon oil", instruction)
         self.assertIn("20x20", instruction)
-        self.assertIn("row 2, col 5", instruction)
+        self.assertIn("row 5, col 10", instruction)
 
     def test_a_later_yes_still_proceeds(self):
         run, be, rec, prompter, tmp = self._build([True, False, True])
@@ -982,7 +985,7 @@ class TestNoDropletCheck(GateCase):
         finally:
             tmp.cleanup()
         self.assertFalse(stats.get("aborted"))
-        self.assertEqual(stats["steps"], 1802)
+        self.assertEqual(stats["steps"], 1798)
         self.assertTrue(any("UNVERIFIED" in n for n in notes), notes)
 
     def test_the_run_record_says_positions_were_not_confirmed(self):
@@ -1084,17 +1087,32 @@ class TestTopUpFollowsDropletCheck(GateCase):
         The registration probe (step.idx < 0) gets a full-size droplet so the
         run can get past phase 2 when the droplet check is enabled -- otherwise
         it aborts there and never reaches the sweep this test is about.
+
+        Both blobs are derived from the configured load position rather than
+        hardcoded. They used to be literals matching row 2, col 5; when the load
+        position moved to (5, 10) the probe no longer sat where registration
+        expected it, phase 2 aborted, and this test failed for a reason that had
+        nothing to do with top-up prompts.
         """
 
         def observe(self, step, frame_index, t):
+            from chiphealth.config import SweepConfig
             from chiphealth.detector import Blob, Observation
+            s = SweepConfig()
+            # Electrode k spans [k-0.5, k+0.5], so a window at (row, col) has
+            # its bbox origin half a cell back and its centroid half a cell in
+            # from the far edge.
+            r0, c0 = s.start_row - 0.5, s.start_col - 0.5
             if step.idx < 0:                      # registration probe
-                b = Blob(centroid_row=11.5, centroid_col=14.5,
-                         area_electrodes=400.0, row=1.5, col=4.5,
-                         height=20.0, width=20.0)
+                b = Blob(centroid_row=r0 + s.window_h / 2.0,
+                         centroid_col=c0 + s.window_w / 2.0,
+                         area_electrodes=float(s.window_h * s.window_w),
+                         row=r0, col=c0,
+                         height=float(s.window_h), width=float(s.window_w))
             else:                                 # empty chip: a small artifact
-                b = Blob(centroid_row=11.5, centroid_col=14.5,
-                         area_electrodes=89.0, row=6.0, col=9.0,
+                b = Blob(centroid_row=r0 + s.window_h / 2.0,
+                         centroid_col=c0 + s.window_w / 2.0,
+                         area_electrodes=89.0, row=r0 + 1.0, col=c0 + 1.0,
                          height=10.0, width=10.0)
             return Observation(step.idx, frame_index, t, (b,))
 
@@ -1122,7 +1140,7 @@ class TestTopUpFollowsDropletCheck(GateCase):
         self.assertEqual(asked, [])
         self.assertFalse(any("Liquid low" in n for n in notes), notes)
         # >= because a static artifact flags blocks, so the fine pass adds steps
-        self.assertGreaterEqual(stats["steps"], 1802)
+        self.assertGreaterEqual(stats["steps"], 1798)
 
     def test_the_skip_note_says_top_up_is_disabled_too(self):
         run, be, rec, prompter, tmp = self._build([True, True], rig=self.Tiny())
@@ -1261,3 +1279,148 @@ class TestBandsFlag(unittest.TestCase):
         finally:
             logging.disable(logging.NOTSET)
             tmp.cleanup()
+
+
+class TestExceptionIsRecorded(unittest.TestCase):
+    """What ended a run has to survive in the artifact, not just the console.
+
+    The console is exactly what gets lost: a terminal scrolls, or is closed,
+    and then the run folder cannot say what happened.
+    """
+
+    def describe(self, exc):
+        from chiphealth.run_health import describe_exception
+        try:
+            raise exc
+        except BaseException as e:
+            return describe_exception(e)
+
+    def test_a_real_error_records_type_message_and_location(self):
+        note = self.describe(ValueError("probe left the chip"))
+        self.assertIn("ValueError", note)
+        self.assertIn("probe left the chip", note)
+        self.assertIn("test_run_health.py:", note)
+        self.assertIn("de-energised", note)
+
+    def test_ctrl_c_is_not_reported_as_a_failure(self):
+        """A run folder that calls Ctrl-C a failure sends the next reader
+        hunting for a bug that is not there."""
+        note = self.describe(KeyboardInterrupt())
+        self.assertIn("INTERRUPTED by the operator", note)
+        self.assertIn("Ctrl-C", note)
+        self.assertIn("Not a failure", note)
+
+    def test_a_message_less_exception_still_names_its_type(self):
+        self.assertIn("RuntimeError", self.describe(RuntimeError()))
+
+    def test_the_note_reaches_run_json(self):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            run, be, rec, prompter, tmp2 = None, None, None, None, None
+            from chiphealth.run_health import HealthRun
+            cfg = RunConfig()
+            cfg.chip_id = "x"
+            cfg.runs_root = Path(tmp.name)
+            cfg.sweep.step_delay_s = 0.0
+            chip = ChipController(FakeBackend(rows=ROWS, cols=COLS), ROWS, COLS,
+                                  cfg.chip.volts, armed=False, step_delay_s=0.0,
+                                  sleep=lambda _s: None)
+            rec = RunRecorder(cfg, "exc", cfg.chip_id, image_writer=lambda p, f: None)
+            r = HealthRun(cfg, chip, SyntheticSource(simulate.SyntheticRig()), rec,
+                          LiveView(), Prompter(rec, interactive=False))
+            r.phase3_baseline = lambda: (_ for _ in ()).throw(
+                RuntimeError("camera fell over"))
+            with self.assertRaises(RuntimeError):
+                r.run()
+            note = next(n for n in rec.notes if "RuntimeError" in n)
+            self.assertIn("camera fell over", note)
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+
+
+class TestDryRunVerdictsAreMarked(unittest.TestCase):
+    """A dry run still writes a coverage map, and that map means nothing."""
+
+    def test_the_artifact_says_the_verdicts_are_not_measurements(self):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(["--chip-id", "d", "--simulate", "--step-delay", "0",
+                      "--bands", "1", "--runs-root", tmp.name, "--headless",
+                      "--non-interactive"])
+            meta = json.loads((next(Path(tmp.name).iterdir()) / "run.json").read_text())
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+        note = next((n for n in meta["notes"] if n.startswith("DRY-RUN:")), None)
+        self.assertIsNotNone(note, meta["notes"])
+        self.assertIn("ARTEFACTS OF NOT ENERGISING", note)
+        self.assertIn("--arm", note)
+
+    def test_an_armed_run_carries_no_such_note(self):
+        """Built directly rather than via main(): an armed run cannot use a
+        zero step delay (the guard floors it at 0.25s), and 290 frames x 0.25s
+        is two minutes of real sleeping inside a unit test."""
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            cfg = RunConfig()
+            cfg.chip_id = "d"
+            cfg.armed = True
+            cfg.runs_root = Path(tmp.name)
+            chip = ChipController(FakeBackend(rows=ROWS, cols=COLS), ROWS, COLS,
+                                  cfg.chip.volts, armed=True, step_delay_s=0.0,
+                                  sleep=lambda _s: None)
+            rec = RunRecorder(cfg, "armed", cfg.chip_id,
+                              image_writer=lambda p, f: None)
+            r = HealthRun(cfg, chip, SyntheticSource(simulate.SyntheticRig()), rec,
+                          LiveView(), Prompter(rec, interactive=False))
+            r.phase0_preflight()
+            notes = list(rec.notes)
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+        self.assertFalse(any(n.startswith("DRY-RUN:") for n in notes), notes)
+
+
+class TestDryRunIsFastByDefault(unittest.TestCase):
+    """A dry run must not pay a delay that exists only for liquid.
+
+    The delay gives liquid time to reflow. A dry run energises nothing, so it
+    has nothing to wait for -- charging it 0.5s x 1798 frames made a plumbing
+    check a 15-minute wait for no physical reason.
+    """
+
+    def delay(self, *extra):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(["--chip-id", "t", "--simulate", "--bands", "1",
+                      "--runs-root", tmp.name, "--headless", "--non-interactive",
+                      *extra])
+            meta = json.loads((next(Path(tmp.name).iterdir()) / "run.json").read_text())
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+        return meta["config"]["sweep"]["step_delay_s"]
+
+    def test_a_dry_run_defaults_to_no_delay(self):
+        """And the value used is in run.json -- never silently retimed."""
+        self.assertEqual(self.delay(), 0.0)
+
+    def test_an_explicit_step_delay_still_wins_in_dry_run(self):
+        # 0.001 rather than a realistic value: this asserts the override is
+        # honoured and recorded, and a real delay would make the test sleep.
+        self.assertEqual(self.delay("--step-delay", "0.001"), 0.001)
+
+    def test_an_armed_run_keeps_the_proven_default(self):
+        """Checked on the config rather than by running: an armed run at 0.5s
+        x 286 frames is 2.4 minutes, which does not belong in a unit test."""
+        cfg = RunConfig()
+        cfg.armed = True
+        self.assertEqual(cfg.sweep.step_delay_s, 0.5)
+        self.assertEqual(cfg.sweep.dry_run_step_delay_s, 0.0)
