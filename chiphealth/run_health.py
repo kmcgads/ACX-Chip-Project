@@ -538,11 +538,25 @@ class HealthRun:
         probe = sweep.Step(idx=-1, row=s.start_row, col=s.start_col,
                            h=s.window_h, w=s.window_w, axis=sweep.AXIS_COL,
                            direction=+1, kind=sweep.KIND_TRAVEL, band=-1)
-        _, _, obs = self.source.read(probe, self.now())
+        _, frame, obs = self.source.read(probe, self.now())
+        expected = {
+            "centroid_row": s.start_row + s.window_h / 2.0 - 0.5,
+            "centroid_col": s.start_col + s.window_w / 2.0 - 0.5,
+            "area_electrodes": float(s.window_h * s.window_w),
+            "start_row": s.start_row, "start_col": s.start_col,
+            "window_h": s.window_h, "window_w": s.window_w,
+            "centroid_tol_electrodes":
+                self.cfg.detector.registration_centroid_tol_electrodes,
+            "area_tol_frac": self.cfg.detector.registration_area_tol_frac,
+        }
         primary = obs.primary()
         if primary is None:
-            self.rec.note("Registration check: no droplet visible. Aborted before "
-                          "energising.")
+            msg = ("Registration check: no droplet visible. Aborted before "
+                   "energising. See registration_failure.json/.jpg for the "
+                   "frame and every blob the detector found.")
+            self.rec.log_registration_failure(
+                obs, expected, ["no blob detected at all"], frame)
+            self.rec.note(msg)
             log.error("No droplet detected -- cannot verify registration.")
             return False
 
@@ -552,9 +566,21 @@ class HealthRun:
             self.cfg.detector.registration_centroid_tol_electrodes,
             self.cfg.detector.registration_area_tol_frac)
         if not res.ok:
+            # Save before returning. This abort happens before the baseline and
+            # before any step is driven, so without this the run folder holds no
+            # evidence of what the camera saw at the moment it refused.
+            self.rec.log_registration_failure(obs, expected, res.reasons, frame)
             for reason in res.reasons:
                 log.error("Registration check failed: %s", reason)
                 self.rec.note(f"Registration check failed: {reason}")
+            log.error("Saved the frame and all %d detected blob(s) to %s",
+                      len(obs.blobs), self.rec.paths.registration_json.name)
+            self.rec.note(
+                f"Registration failure evidence saved: "
+                f"{self.rec.paths.registration_json.name} lists all "
+                f"{len(obs.blobs)} blob(s) found; the check judges the LARGEST, "
+                f"so a glare patch or chip edge bigger than the droplet is what "
+                f"gets measured.")
             return False
         log.info("Registration OK (centroid error %.2f electrodes, area ratio %.2f)",
                  res.centroid_error_electrodes, res.area_ratio)

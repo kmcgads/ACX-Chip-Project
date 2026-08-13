@@ -183,6 +183,10 @@ class RunPaths:
         self.coverage = self.root / "coverage.json"
         self.summary = self.root / "summary.md"
         self.video = self.root / "video.mkv"
+        # Registration failure aborts in phase 2, before the baseline and before
+        # any step is driven, so nothing else in this layout ever gets written.
+        self.registration_json = self.root / "registration_failure.json"
+        self.registration_frame = self.root / "registration_failure.jpg"
 
     def mkdirs(self) -> None:
         for d in (self.root, self.stills_routine, self.stills_flagged,
@@ -240,6 +244,44 @@ class RunRecorder:
         if extra:
             meta.update(extra)
         self._write_json(self.paths.run_json, meta)
+
+    def log_registration_failure(self, obs, expected: dict, reasons,
+                                 frame=None) -> None:
+        """Everything the registration check saw, when it refused the run.
+
+        A failure here aborts phase 2 -- before the baseline, before any step is
+        driven -- so the run folder is otherwise **empty**: no stills, no
+        observations, no timeline. That left the one question worth answering
+        ("what did the camera actually see?") with no evidence at all, which is
+        exactly the situation this exists to prevent.
+
+        Records **every** blob, not just the primary. The check judges
+        ``Observation.primary()``, which is simply the largest -- so a glare
+        patch or a chip edge bigger than the droplet is what gets measured, and
+        seeing the runners-up is what makes that diagnosable.
+        """
+        blobs = sorted(obs.blobs, key=lambda b: -b.area_electrodes)
+        payload = {
+            "run_id": self.run_id,
+            "chip_id": self.chip_id,
+            "schema_version": SCHEMA_VERSION,
+            "expected": expected,
+            "reasons": list(reasons),
+            "n_blobs": len(blobs),
+            "primary_is_largest_blob": True,
+            "blobs": [{
+                "rank": i,
+                "is_primary": i == 0,
+                "area_electrodes": b.area_electrodes,
+                "centroid_row": b.centroid_row,
+                "centroid_col": b.centroid_col,
+                "row": b.row, "col": b.col,
+                "height": b.height, "width": b.width,
+            } for i, b in enumerate(blobs)],
+        }
+        self._write_json(self.paths.registration_json, payload)
+        if frame is not None:
+            self._save(self.paths.registration_frame, frame)
 
     # ── steps ────────────────────────────────────────────────────────────────
 
