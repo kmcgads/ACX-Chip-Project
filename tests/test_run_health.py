@@ -19,6 +19,27 @@ from chiphealth.run_health import (HealthRun, LiveView, Prompter, SyntheticSourc
 
 ROWS = COLS = 128
 
+# Two tests below assert the NO-OPENCV fallback path -- what happens on a
+# machine where `import cv2` fails. They are statements about that environment,
+# not about the code, so on a machine that HAS OpenCV they are unrunnable
+# rather than failing: the picker really can be created, and asserting it comes
+# back None is asserting something false about a working install.
+#
+# They were failing outright (not skipping) on the WSL box, which has cv2
+# 4.13.0, and had been for long enough that two permanent red marks were
+# background noise -- exactly the condition in which a real regression goes
+# unnoticed. Guarded rather than deleted: the fallback they cover is real and
+# still matters on a bare rig machine, which is where the chip-health run's
+# corner picking actually has to degrade gracefully.
+try:  # pragma: no cover - environment probe
+    import cv2 as _cv2  # noqa: F401
+    HAVE_CV2 = True
+except Exception:  # pragma: no cover
+    HAVE_CV2 = False
+
+NEEDS_NO_CV2 = unittest.skipIf(
+    HAVE_CV2, "asserts the no-OpenCV fallback; OpenCV is installed here")
+
 
 class TestArgParsing(unittest.TestCase):
 
@@ -515,6 +536,7 @@ class TestMissingRegistration(GateCase):
         self.assertIn("corners_px", message)
         self.assertIn("--reuse-calibration", message)
 
+    @NEEDS_NO_CV2
     def test_picker_unavailable_says_so_and_still_aborts_cleanly(self):
         """No OpenCV on this machine, so the picker cannot open. The run must
         stop with an explanation rather than crash mid-sweep."""
@@ -948,6 +970,7 @@ class TestNoOptionalCv2(unittest.TestCase):
         self.assertIn("cv2", params)
         self.assertIn("np", params)
 
+    @NEEDS_NO_CV2
     def test_picker_create_returns_none_without_opencv(self):
         from chiphealth.run_health import CornerPicker
         self.assertIsNone(CornerPicker.create())
