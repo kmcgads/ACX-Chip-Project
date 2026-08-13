@@ -29,6 +29,8 @@ import time
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
+from .clearance import ClearanceViolation, require as require_clearance
+
 log = logging.getLogger(__name__)
 
 # Number of voltage rails SetVolt/InquireVolt take. chipsetup.py:47.
@@ -308,12 +310,17 @@ class ChipController:
                  step_delay_s: float = 0.5, sleep=time.sleep,
                  volt_tolerance: int = 2, volt_settle_s: float = 0.3,
                  power_settle_s: float = 0.0,
-                 volt_poll_diagnostic: bool = False) -> None:
+                 volt_poll_diagnostic: bool = False,
+                 allow_violations: bool = False) -> None:
         self.backend = backend
         self.rows = rows
         self.cols = cols
         self.volts = list(volts)
         self.armed = bool(armed)
+        # Session-wide clearance override. False, and there is no config field
+        # or environment variable that can flip it -- see clearance.require.
+        # A caller may still override one single frame via activate(...).
+        self.allow_violations = bool(allow_violations)
         self.step_delay_s = float(step_delay_s)
         self._sleep = sleep
         self.volt_tolerance = int(volt_tolerance)
@@ -477,7 +484,8 @@ class ChipController:
 
     # ── actuation ────────────────────────────────────────────────────────────
 
-    def activate(self, drops: Sequence[Drop], settle: bool = True) -> int:
+    def activate(self, drops: Sequence[Drop], settle: bool = True,
+                 allow_violations: bool | None = None) -> int:
         """Send one electrode frame. The whole frame, every time.
 
         Wraps ``ActivateElec(rows, cols, count, Drop*)``. There is no
@@ -485,10 +493,31 @@ class ChipController:
         shot (workspace/analysis.md §2).
 
         In dry-run the intended frame is recorded and logged, not sent.
+
+        **The clearance gate runs here, on every frame, armed or not.** This is
+        the single choke point every drop on this chip passes through -- the
+        chip-health resting frame, the registration hold, every sweep step, the
+        fine-pass probe and every split-tree frame all arrive at this method --
+        so gating it is what makes the guarantee "nowhere, not just the split
+        tree" rather than a promise about the call sites that were remembered.
+        Dry runs are gated too: a dry run exists to prove the plumbing, and a
+        plan that cannot execute armed has not proved anything.
+
+        Refusing an off-grid frame is not new; ``_validate`` did it. What is new
+        is that the refusal names each short side and by how much, and that it
+        can be overridden deliberately rather than only by editing geometry.
+        ``allow_violations`` defaults to the session-wide value set at
+        construction (itself False); pass it explicitly to override one frame.
         """
         self.intended.append([(d.height, d.width, d.row, d.col) for d in drops])
         for d in drops:
             self._validate(d)
+        require_clearance(
+            drops, self.rows, self.cols,
+            what=f"frame {len(self.intended)} ({len(drops)} drop(s))",
+            allow_violations=(self.allow_violations if allow_violations is None
+                              else allow_violations),
+        )
 
         if not self.armed:
             self.frames_suppressed += 1
@@ -515,14 +544,16 @@ class ChipController:
         return self.backend.activate_elec(self.rows, self.cols, [])
 
     def _validate(self, d: Drop) -> None:
-        r0, r1, c0, c1 = d.covers()
+        """Per-drop sanity that is NOT about clearance.
+
+        A non-positive extent is a malformed drop, not a misplaced one: there
+        is no side to be short on and no margin that would fix it, so it is
+        never covered by ``allow_violations``. Bounds moved out to
+        ``clearance.require``, which measures the whole frame at once and can
+        say which side is short and by how much.
+        """
         if d.height <= 0 or d.width <= 0:
             raise ValueError(f"{d!r} has non-positive extent")
-        if r0 < 1 or c0 < 1 or r1 > self.rows or c1 > self.cols:
-            raise ValueError(
-                f"{d!r} spans rows {r0}-{r1}, cols {c0}-{c1}, which is off a "
-                f"{self.rows}x{self.cols} chip"
-            )
 
 
 def make_backend(kind: str, dll_dir: str, dll_name: str,

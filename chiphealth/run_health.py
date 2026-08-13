@@ -30,9 +30,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from pathlib import Path
+from typing import Callable
 
 from . import DETECTOR_VERSION, SCHEMA_VERSION
-from . import calibration, simulate, sweep
+from . import calibration, clearance, simulate, sweep
 from .actuation import ChipController, Drop, make_backend
 from .config import RunConfig, SweepConfig, from_env
 from .detector import Detector, Observation
@@ -411,6 +412,69 @@ class HealthRun:
             log.warning(msg)
             self.rec.note(msg)
 
+    def phase0c_clearance(self) -> None:
+        """Refuse the whole run if any drop it plans to command is off-grid.
+
+        Runs before phase 1, so before a single electrode is energised and
+        before the operator is asked to put liquid anywhere.
+
+        Every frame is independently gated at ``ChipController.activate``, so
+        nothing here is load-bearing for safety -- what it buys is TIMING. The
+        per-frame gate fires at the first bad frame, which for a sweep is
+        several hundred steps and several minutes in, with liquid on the chip
+        and a half-written run folder. Measuring the plan as a whole up front
+        turns that into a refusal before the load prompt.
+
+        The three places a drop is loaded or moved in this run:
+
+          resting frame  the 20x20 hold energised at phase 1 so the operator
+                         has somewhere to load into (this hardware cannot hold
+                         a droplet at 0V)
+          registration   phase 2 measures the droplet against that same window
+          coarse sweep   every commanded window of the serpentine, plus the
+                         vertical pass when ``axes="both"``
+
+        The FINE pass is deliberately not here. Its probe positions come from
+        which blocks the coarse sweep flagged, so they do not exist yet; those
+        frames are gated one at a time at ``activate`` like everything else,
+        and :meth:`phase6_fine` says so.
+
+        Raises ClearanceViolation rather than returning False like the other
+        phase gates. A geometry that does not fit is a configuration error, not
+        an operator decision -- there is no answer the operator could give that
+        would make it fit, so there is nothing to ask.
+        """
+        log.info("PHASE 0c  clearance")
+        s, chip_cfg = self.cfg.sweep, self.cfg.chip
+        allow = self.chip.allow_violations
+
+        window = Drop(s.window_h, s.window_w, s.start_row, s.start_col)
+        # Lazy, and in this order deliberately. The load position is the thing
+        # an operator can actually act on, so it must be the first thing that
+        # fails -- and `plan_serpentine` has its own start_col guard that would
+        # otherwise raise first with a message about bands.
+        checks: list[tuple[str, Callable[[], list]]] = [
+            (f"phase 1 resting frame ({s.window_h}x{s.window_w} at "
+             f"row {s.start_row}, col {s.start_col})", lambda: [window]),
+            ("phase 2 registration window", lambda: [window]),
+            ("phase 4 coarse sweep", self._coarse_steps),
+        ]
+
+        for what, items in checks:
+            c = clearance.require(items(), chip_cfg.rows, chip_cfg.cols,
+                                  what=what, allow_violations=allow)
+            log.info("  %s", c.describe().splitlines()[0])
+            if not c.ok:
+                # Only reachable with the override on -- require() raised
+                # otherwise. Put it in the artifact, not just the console.
+                self.rec.note(
+                    f"CLEARANCE OVERRIDE: {what} does not fit and was allowed "
+                    f"anyway (--allow-clearance-violations). Short on "
+                    f"{c.short_sides()}. Coordinates outside the electrode "
+                    f"array were sent to the vendor DLL, whose behaviour there "
+                    f"is unspecified -- this run's geometry is not trustworthy."
+                )
+
     def phase0b_voltage(self) -> bool:
         """Confirm the voltage connection before anything depends on it.
 
@@ -749,8 +813,14 @@ class HealthRun:
             if frame is not None:
                 self.rec._save(self.rec.paths.baseline / f"baseline_{i:02d}.jpg", frame)
 
-    def phase4_coarse(self) -> list:
-        log.info("PHASE 4  coarse sweep")
+    def _coarse_steps(self) -> list:
+        """The planned coarse traversal. Pure -- energises nothing.
+
+        Split out of :meth:`phase4_coarse` so :meth:`phase0c_clearance` can
+        measure the very same steps that will later be driven. Planning it
+        twice from the same config would also work right up until someone
+        adds a parameter to one call site and not the other.
+        """
         s = self.cfg.sweep
         steps = sweep.plan_serpentine(self.cfg.chip.rows, self.cfg.chip.cols,
                                       s.window_h, s.window_w,
@@ -765,6 +835,12 @@ class HealthRun:
                                          first_band_col=s.first_band_row,
                                          prime=s.prime_band0,
                                          max_bands=s.max_bands)
+        return steps
+
+    def phase4_coarse(self) -> list:
+        log.info("PHASE 4  coarse sweep")
+        s = self.cfg.sweep
+        steps = self._coarse_steps()
         log.info("%d steps, %.1f min of delay alone at %.2fs",
                  len(steps), sweep.total_duration_s(steps, s.step_delay_s) / 60.0,
                  s.step_delay_s)
@@ -832,6 +908,13 @@ class HealthRun:
         region means driving it there first, and the droplet can get stuck on
         the way: `unreachable` is a first-class outcome and is itself evidence
         about that path.
+
+        CLEARANCE. This is the one phase :meth:`phase0c_clearance` cannot
+        pre-measure: the probe and transport windows are derived from which
+        blocks the coarse sweep flagged, so they do not exist until phase 5 has
+        run. Every frame is still gated at ``ChipController.activate``, so an
+        off-grid probe is refused rather than clipped -- it just surfaces here
+        instead of before the load prompt.
         """
         if not targets or self.aborted:
             # Say so. Silence here is indistinguishable from a skipped phase.
@@ -880,6 +963,9 @@ class HealthRun:
         corners = corners if corners is not None else self.cfg.capture.corners_px
         try:
             self.phase0_preflight()
+            # Before the voltage prompt and before the load prompt: a geometry
+            # that does not fit should cost the operator nothing but a message.
+            self.phase0c_clearance()
             if not self.phase0b_voltage():
                 self.aborted = True
                 return self.phase7_shutdown()
@@ -1202,6 +1288,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "0.05s was one of three confounded candidate causes of "
                         "the 2026-08-10 droplet break-up; do not use this "
                         "without a reason you can write down.")
+    p.add_argument("--allow-clearance-violations", action="store_true",
+                   help="Permit loading or moving a drop that runs off the "
+                        "electrode array. Off by default and there is no config "
+                        "field for it, so it cannot be left switched on. The "
+                        "vendor DLL's behaviour outside the array is "
+                        "unspecified, so the frames it applies may not be the "
+                        "ones planned and the run's geometry is not "
+                        "trustworthy; taking this is recorded in run.json.")
     p.add_argument("--block", type=int, default=None, help="Fine block size.")
     p.add_argument("--bands", type=int, default=None,
                    help="Stop after N bands instead of sweeping the whole chip "
@@ -1395,7 +1489,8 @@ def main(argv=None) -> int:
                           volt_tolerance=cfg.chip.volt_tolerance,
                           volt_settle_s=cfg.chip.volt_settle_s,
                           power_settle_s=cfg.chip.power_settle_s,
-                          volt_poll_diagnostic=cfg.chip.volt_poll_diagnostic)
+                          volt_poll_diagnostic=cfg.chip.volt_poll_diagnostic,
+                          allow_violations=args.allow_clearance_violations)
 
     cli_corners = parse_corners(args.corners)
     if cli_corners:
