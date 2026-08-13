@@ -1424,3 +1424,105 @@ class TestDryRunIsFastByDefault(unittest.TestCase):
         cfg.armed = True
         self.assertEqual(cfg.sweep.step_delay_s, 0.5)
         self.assertEqual(cfg.sweep.dry_run_step_delay_s, 0.0)
+
+
+class TestRegistrationFailureIsDiagnosable(unittest.TestCase):
+    """A failed registration must leave evidence of what the camera saw.
+
+    The abort happens in phase 2, before the baseline and before any step is
+    driven, so the run folder is otherwise completely empty -- which is how
+    four consecutive hardware failures produced no images, no observations and
+    no blob list to look at.
+    """
+
+    class Glare(simulate.SyntheticRig):
+        """A blob far bigger than the droplet, somewhere else on the chip.
+
+        Reproduces the 2026-08-12 signature: the primary blob measured 3.6x and
+        6.9x the expected 400 electrodes, because primary() is simply the
+        largest and a bright region beat the droplet.
+        """
+
+        def observe(self, step, frame_index, t):
+            from chiphealth.detector import Blob, Observation
+            glare = Blob(centroid_row=100.0, centroid_col=95.0,
+                         area_electrodes=2776.0, row=80.0, col=75.0,
+                         height=40.0, width=40.0)
+            droplet = Blob(centroid_row=14.5, centroid_col=19.5,
+                           area_electrodes=400.0, row=4.5, col=9.5,
+                           height=20.0, width=20.0)
+            return Observation(step.idx, frame_index, t, (glare, droplet))
+
+    def _run(self, rig):
+        tmp = tempfile.TemporaryDirectory()
+        logging.disable(logging.CRITICAL)
+        try:
+            cfg = RunConfig()
+            cfg.chip_id = "r"
+            cfg.runs_root = Path(tmp.name)
+            chip = ChipController(FakeBackend(rows=ROWS, cols=COLS), ROWS, COLS,
+                                  cfg.chip.volts, armed=False, step_delay_s=0.0,
+                                  sleep=lambda _s: None)
+            rec = RunRecorder(cfg, "regfail", cfg.chip_id,
+                              image_writer=lambda p, f: None)
+            run = HealthRun(cfg, chip, SyntheticSource(rig), rec, LiveView(),
+                            Prompter(rec, interactive=False))
+            run.phase0_preflight()
+            ok = run.phase2_registration()
+            payload = (json.loads(rec.paths.registration_json.read_text())
+                       if rec.paths.registration_json.exists() else None)
+            return ok, payload, list(rec.notes)
+        finally:
+            logging.disable(logging.NOTSET)
+            tmp.cleanup()
+
+    def test_a_failure_writes_every_blob_not_just_the_primary(self):
+        ok, payload, _ = self._run(self.Glare())
+        self.assertFalse(ok)
+        self.assertIsNotNone(payload, "no evidence file written")
+        self.assertEqual(payload["n_blobs"], 2)
+        areas = [b["area_electrodes"] for b in payload["blobs"]]
+        self.assertEqual(areas, sorted(areas, reverse=True), "not largest-first")
+        self.assertTrue(payload["blobs"][0]["is_primary"])
+        runner_up = payload["blobs"][1]
+        self.assertAlmostEqual(runner_up["area_electrodes"], 400.0)
+        self.assertAlmostEqual(runner_up["centroid_row"], 14.5)
+
+    def test_it_records_what_was_expected_so_the_file_stands_alone(self):
+        _, payload, _ = self._run(self.Glare())
+        exp = payload["expected"]
+        self.assertAlmostEqual(exp["centroid_row"], 14.5)
+        self.assertAlmostEqual(exp["centroid_col"], 19.5)
+        self.assertEqual(exp["area_electrodes"], 400.0)
+        self.assertEqual(exp["centroid_tol_electrodes"], 4.0)
+        self.assertTrue(payload["reasons"])
+
+    def test_the_notes_point_at_the_evidence_file(self):
+        _, _, notes = self._run(self.Glare())
+        self.assertTrue(any("registration_failure.json" in n for n in notes), notes)
+        self.assertTrue(any("LARGEST" in n for n in notes), notes)
+
+    def test_no_droplet_at_all_also_leaves_evidence(self):
+        class Empty(simulate.SyntheticRig):
+            def observe(self, step, frame_index, t):
+                from chiphealth.detector import Observation
+                return Observation(step.idx, frame_index, t, ())
+
+        ok, payload, _ = self._run(Empty())
+        self.assertFalse(ok)
+        self.assertIsNotNone(payload, "an empty frame is evidence too")
+        self.assertEqual(payload["n_blobs"], 0)
+        self.assertIn("no blob detected at all", payload["reasons"])
+
+    def test_a_passing_registration_writes_no_failure_file(self):
+        class Good(simulate.SyntheticRig):
+            def observe(self, step, frame_index, t):
+                from chiphealth.detector import Blob, Observation
+                b = Blob(centroid_row=14.5, centroid_col=19.5,
+                         area_electrodes=400.0, row=4.5, col=9.5,
+                         height=20.0, width=20.0)
+                return Observation(step.idx, frame_index, t, (b,))
+
+        ok, payload, _ = self._run(Good())
+        self.assertTrue(ok)
+        self.assertIsNone(payload)
