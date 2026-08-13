@@ -311,7 +311,8 @@ class ChipController:
                  volt_tolerance: int = 2, volt_settle_s: float = 0.3,
                  power_settle_s: float = 0.0,
                  volt_poll_diagnostic: bool = False,
-                 allow_violations: bool = False) -> None:
+                 allow_violations: bool = False,
+                 log_frames: bool = False) -> None:
         self.backend = backend
         self.rows = rows
         self.cols = cols
@@ -328,8 +329,17 @@ class ChipController:
         self.power_settle_s = float(power_settle_s)
         self.volt_poll_diagnostic = bool(volt_poll_diagnostic)
 
+        #: Log every ActivateElec call with its exact struct fields and rc.
+        #: For bring-up: it is the only way to see from Python what the DLL
+        #: was actually handed.
+        self.log_frames = bool(log_frames)
+
         self.frames_sent = 0
         self.frames_suppressed = 0
+        #: Return code of the most recent ActivateElec, or None if none sent.
+        self.last_activate_rc: int | None = None
+        #: (call, rc) for every DLL call, in order. See :meth:`_record_rc`.
+        self.rc_log: list[tuple[str, int]] = []
         self._open = False
         self.intended: list[list[tuple[int, int, int, int]]] = []
         # The startup rail reading, taken once in open(). Cached because
@@ -373,14 +383,20 @@ class ChipController:
         defect, not a feature. The prompt that was doing real work, the voltage
         confirmation, is phase 0b in the orchestrator.
         """
-        self.backend.init_usb()
-        if not self.backend.open_usb():
+        self._record_rc("InitUSB", self.backend.init_usb())
+        rc_open = self.backend.open_usb()
+        self._record_rc("OpenUSB", rc_open)
+        # The ONE call whose convention is evidenced: every legacy script
+        # writes `if res:` here (chipsetup.py:29). Kept as the only
+        # truthiness test in this class.
+        if not rc_open:
             raise ChipError("OpenUSB failed -- is the device connected?")
         self._open = True
         if self.armed:
             # Return codes were previously discarded, so a refused SetPower
             # looked identical to a successful one.
             rc_power = self.backend.set_power(True)
+            self._record_rc("SetPower", rc_power)
             log.info("SetPower(True) -> rc=%s", rc_power)
             # csvvolcont.py issues SetVolt immediately after SetPower. Defaults
             # to 0; configurable only so a genuinely slow supply can be given
@@ -390,6 +406,7 @@ class ChipController:
                          self.power_settle_s)
                 self._sleep(self.power_settle_s)
             rc_volt = self.backend.set_volt(self.volts)
+            self._record_rc("SetVolt", rc_volt)
             log.info("SetVolt%s -> rc=%s", tuple(self.volts), rc_volt)
 
             if self.volt_poll_diagnostic:
@@ -400,6 +417,7 @@ class ChipController:
             log.info("DRY-RUN: skipping SetPower(True) and SetVolt%s", tuple(self.volts))
 
         rc, rails = self.backend.inquire_volt()
+        self._record_rc("InquireVolt", rc)
         self._rails = (rc, list(rails))
         log.info("InquireVolt rc=%s rails=%s (global rails, NOT per-electrode)", rc, rails)
 
@@ -527,10 +545,77 @@ class ChipController:
         else:
             rc = self.backend.activate_elec(self.rows, self.cols, drops)
             self.frames_sent += 1
+            self.last_activate_rc = rc
+            self._record_rc("ActivateElec", rc)
+            if self.log_frames:
+                log.info("ActivateElec(rows=%d, cols=%d, count=%d, %s) -> rc=%s",
+                         self.rows, self.cols, len(drops),
+                         [(d.height, d.width, d.row, d.col) for d in drops], rc)
 
         if settle and self.step_delay_s > 0:
             self._sleep(self.step_delay_s)
         return rc
+
+    def _record_rc(self, call: str, rc: int) -> None:
+        """Record a DLL return code, and warn ONLY when it is unambiguous.
+
+        WHAT THESE RETURN CODES ARE, as far as anything establishes it:
+
+        `analysis.md` §17 says DLLTest.dll's error signalling is "return codes
+        only" -- so they do mean something -- but no disassembly pinned the
+        convention, and of the five calls the legacy scripts make, exactly ONE
+        tests its result: ``OpenUSB``, as ``if res:`` (chipsetup.py:29,
+        1pixsplit.py:126, cleanup.py:77). ``SetPower``, ``SetVolt``,
+        ``InquireVolt`` and ``ActivateElec`` all assign ``res`` and never look
+        at it. There is therefore NO evidence for truthy-means-success on any
+        call except OpenUSB, and generalising OpenUSB's convention to the other
+        four is an assumption, not a finding.
+
+        The evidence actively contradicts it. On the instrument, 2026-08-13:
+
+            SetPower(True)  -> rc=0     and the rails came up
+            SetVolt(45,...) -> rc=0     and the rails read 46,46,46,0,0,0,0,0,0
+            InquireVolt     -> rc=18
+            ActivateElec    -> rc=0
+
+        Two things fall out. InquireVolt is the calibration point: §2 records
+        that it parses an **18-byte** 0xAA-framed USB response, and it returned
+        exactly 18 -- so the return is a BYTE COUNT, not a boolean. Under that
+        reading a write-only command with no response body returns 0 because it
+        receives nothing, which is the normal, healthy value. And SetVolt is
+        the control: it returned 0 while demonstrably working, since the rails
+        came back in the exact commanded PATTERN (three high, six zero), which
+        is not something a failed call or a leftover idle voltage produces.
+
+        So ``rc == 0`` from a write command is not a failure signal, and this
+        method no longer treats it as one. An earlier version warned that
+        ActivateElec's rc=0 meant the call was "REFUSED"; that was wrong, and
+        it was wrong in the expensive direction -- it pointed at software while
+        the calls were in fact being accepted.
+
+        A NEGATIVE rc is still worth flagging: libusb error codes are negative
+        and a byte count cannot be, so under either reading negative is bad.
+        """
+        self.rc_log.append((call, rc))
+        if rc < 0:
+            log.warning(
+                "%s returned rc=%s. Negative is an error under both readings "
+                "of this API's return codes -- a libusb error code, or an "
+                "impossible byte count. This one is worth chasing.", call, rc)
+
+    def rc_summary(self) -> str:
+        """Every DLL return code this session, with the caveat attached."""
+        if not self.rc_log:
+            return "No DLL calls recorded."
+        out = ["DLL return codes this session:"]
+        out += [f"  {call:<14} rc={rc}" for call, rc in self.rc_log]
+        out.append(
+            "Only OpenUSB's convention is evidenced (truthy = success, "
+            "chipsetup.py:29). InquireVolt returning 18 matches the 18-byte "
+            "response analysis.md §2 disassembled, which suggests these are "
+            "BYTE COUNTS -- making rc=0 the normal value for a write-only "
+            "command, not a failure. Negative would be unambiguous; 0 is not.")
+        return "\n".join(out)
 
     def require_armed(self, what: str) -> None:
         if not self.armed:

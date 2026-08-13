@@ -711,11 +711,15 @@ def approach_to_split(load: DropNode | None = None,
                       target: DropNode | None = None) -> tuple[Approach, DropNode]:
     """The whole load-to-split move: walk `load` onto `target`'s position.
 
-    Defaults are the protocol as chosen: load where the sweep loads
-    (`default_root`, i.e. `SweepConfig`), split at `split_root`. Returns the
-    approach and the root node the tree should then be planned from.
+    Defaults are the protocol as specified: load at `load_root` (row 5,
+    col 55), split at `split_root` (row 55, col 55). Returns the approach and
+    the root node the tree should then be planned from.
+
+    Pass `load=default_root()` to walk from the chip-health sweep's load
+    position instead -- 95 electrodes and an L-turn rather than 50 straight
+    down.
     """
-    load = load or default_root()
+    load = load or load_root()
     target = target or split_root()
     if (load.height, load.width) != (target.height, target.width):
         raise ValueError(
@@ -1004,9 +1008,48 @@ def default_root(cfg=None) -> DropNode:
                     row=sc.start_row, col=sc.start_col)
 
 
+#: Where the operator LOADS the split experiment. Researcher, this session:
+#: the droplet loads at row 5, col 55 and is then moved to the split position.
+#: Not `SweepConfig` (row 5, col 10) -- that is where the chip-health SWEEP
+#: loads and it is deliberately left alone.
+SPLIT_LOAD_ROW = 5
+SPLIT_LOAD_COL = 55
+
 #: Where the tree SPLITS. Not where the operator loads -- see `split_root`.
 SPLIT_ROOT_ROW = 55
 SPLIT_ROOT_COL = 55
+
+
+def load_root(cfg=None) -> DropNode:
+    """THE LOAD POSITION for a split run: a 20x20 at row 5, col 55.
+
+    Specified by the researcher, not derived, so there is nothing to compute
+    here and nothing to check beyond "is it on the array" -- it is, rows 5-24
+    and cols 55-74.
+
+    It deliberately does NOT need the tree's clearance margin. A load is a
+    plain rectangular hold; only the SPLIT needs 8 clear electrodes above and
+    below and 12 either side, and by the time the tree runs the droplet is at
+    `split_root`. That separation is the whole reason the load position can be
+    dictated by where the operator can physically reach and the split position
+    chosen on merit.
+
+    It shares a COLUMN with `split_root`, which is worth more than it looks:
+    the approach is then a single straight leg down column 55, 50 electrodes,
+    with no corner. From the sweep's load position it would be 95 electrodes
+    and an L-turn. Every electrode of travel is liquid that can be shed
+    invisibly (see `protocol`, NOT VERIFIED §3), so halving the walk halves the
+    exposure.
+
+    `SweepConfig.start_row/start_col` are untouched and still define where the
+    chip-health sweep loads. The two experiments load in different places, and
+    that is now stated in two places rather than conflated in one.
+    """
+    from chiphealth.config import SweepConfig
+    s = cfg or SweepConfig()
+    return DropNode(id="d", parent=None, stage=0,
+                    height=s.window_h, width=s.window_w,
+                    row=SPLIT_LOAD_ROW, col=SPLIT_LOAD_COL)
 
 
 def split_root(cfg=None) -> DropNode:

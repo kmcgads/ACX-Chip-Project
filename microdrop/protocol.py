@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
@@ -123,8 +124,16 @@ class SplitSession:
     axes: Sequence[SP.Axis] = SP.DEFAULT_AXES
     sp: P.SplitParams = P.DEFAULT
     cfg: ChipConfig | None = None
-    #: Where the droplet already is, if it must be walked in. None = it is
-    #: loaded at the split position directly, which is the intended protocol.
+    #: Walk the droplet in from the load position before splitting. TRUE by
+    #: default: the researcher specified that loading happens at row 5, col 55
+    #: and the droplet is then moved to the split position, so the walk is part
+    #: of the protocol rather than an option. Set False to load directly at
+    #: `root` instead, which costs no travel but requires loading mid-chip.
+    #:
+    #: Named `transport`, not `walk`: `walk()` is the phase method below,
+    #: and a dataclass field of the same name silently shadows it.
+    transport: bool = True
+    #: Where the droplet is loaded. None means `splitplan.load_root()`.
     approach_from: SP.DropNode | None = None
     confirm: Callable[..., bool] = console_confirm
     announce: Callable[[str], None] = console_announce
@@ -143,6 +152,10 @@ class SplitSession:
         self.cfg = self.cfg or ChipConfig()
         self.root = self.root or SP.split_root()
         self.plan = SP.plan_tree(self.root, self.axes, self.sp, cfg=self.cfg)
+        if self.transport:
+            self.approach_from = self.approach_from or SP.load_root()
+        else:
+            self.approach_from = None
         self.approach = (
             SP.plan_approach(self.approach_from, self.root.row, self.root.col)
             if self.approach_from is not None else None
@@ -322,14 +335,19 @@ def build_parser() -> "argparse.ArgumentParser":
                         f"row {SP.SPLIT_ROOT_ROW}, col {SP.SPLIT_ROOT_COL} -- "
                         "see its docstring for why. The droplet is loaded here "
                         "directly unless --walk-from is given.")
-    p.add_argument("--walk-from", type=_position, default=None, metavar="ROW,COL",
-                   help="Load at ROW,COL and TRANSPORT to the split position "
-                        "instead of loading there. Off by default: the "
-                        "energised region does the positioning, so loading at "
-                        "row 55 is no harder than at row 5, and every "
-                        "electrode of travel is liquid you can lose with no "
-                        "camera to see it go. Use 5,10 for the sweep's load "
-                        "position (95 electrodes, ~95s).")
+    p.add_argument("--load-at", type=_position, default=None, metavar="ROW,COL",
+                   help="Where the droplet is LOADED, before being moved to "
+                        f"the split position. Default row {SP.SPLIT_LOAD_ROW}, "
+                        f"col {SP.SPLIT_LOAD_COL}, which shares a column with "
+                        "the split position so the walk is one straight leg of "
+                        "50 electrodes. A load needs no split clearance -- it "
+                        "is a plain hold -- so this can be wherever you can "
+                        "reach. Use 5,10 for the sweep's load position (95 "
+                        "electrodes and an L-turn).")
+    p.add_argument("--no-walk", action="store_true",
+                   help="Load directly at the split position and skip the "
+                        "transport entirely. Zero travel, so zero invisible "
+                        "transport loss -- but it means loading mid-chip.")
     p.add_argument("--axes", type=_axes, default=SP.DEFAULT_AXES,
                    help="Split axis order, W/H per stage. Default WHW = 8 "
                         "pieces of 10x5. WHWH = 16 of 5x5, which the default "
@@ -357,7 +375,64 @@ def build_parser() -> "argparse.ArgumentParser":
                         "Recorded in the report. See chiphealth.clearance.")
     p.add_argument("--dll-dir", default=DEFAULT_DLL_DIR,
                    help="Vendor DLL directory. (default: %(default)s)")
+
+    g = p.add_argument_group(
+        "bring-up / diagnostics",
+        "For isolating a software addressing problem from a hardware one.")
+    g.add_argument("--poke", type=_position, default=None, metavar="ROW,COL",
+                   help="Activate ONE rectangle at ROW,COL and hold it. No "
+                        "plan, no tree, no operator gates -- a single "
+                        "ActivateElec call, its exact struct fields and its "
+                        "return code printed. This is the minimal command.")
+    g.add_argument("--size", default="20x20", metavar="HxW",
+                   help="Size for --poke. (default: %(default)s) A 1x1 may be "
+                        "invisible even when working; 20x20 is what the split "
+                        "protocol holds and is easy to see.")
+    g.add_argument("--dump", action="store_true",
+                   help="Print the exact ActivateElec arguments for the hold "
+                        "frame at the current position and exit. No hardware.")
+    g.add_argument("--log-frames", action="store_true",
+                   help="Log every ActivateElec call with its struct fields "
+                        "and return code as it goes out.")
+    g.add_argument("--allow-fake-arm", action="store_true",
+                   help="Permit --arm against the FAKE backend. Refused by "
+                        "default: a fake rig satisfies the rail check exactly "
+                        "like a real one, so an accidental fake armed run "
+                        "looks like a successful run that moved no liquid.")
     return p
+
+
+def _size(text: str) -> tuple[int, int]:
+    try:
+        h, w = (int(v) for v in text.lower().replace(" ", "").split("x"))
+    except Exception:
+        raise argparse.ArgumentTypeError(
+            f"expected HxW (e.g. 20x20), got {text!r}")
+    return h, w
+
+
+def describe_call(rows: int, cols: int, drops: Sequence[Drop]) -> str:
+    """Exactly what goes to the DLL, in the DLL's own terms.
+
+    Field ORDER matters and is not the order the vendor PDF documents: the
+    struct is (height, width, row, col), established by disassembly
+    (workspace/analysis.md §2) and identical in all 13 legacy scripts. Printed
+    positionally as well as by name so a field-order problem is visible.
+    """
+    out = [f"ActivateElec(rows={rows}, cols={cols}, count={len(drops)}, Drop*["]
+    for i, d in enumerate(drops):
+        r0, r1, c0, c1 = d.covers()
+        out.append(
+            f"  [{i}] Drop({d.height}, {d.width}, {d.row}, {d.col})"
+            f"   # (height, width, row, col)")
+        out.append(
+            f"       covers rows {r0}..{r1}, cols {c0}..{c1}  "
+            f"= {(r1 - r0 + 1) * (c1 - c0 + 1)} electrodes")
+    out.append("])")
+    out.append("Indices are 1-BASED: electrode (1,1) is top-left, (128,128) "
+               "bottom-right. cleanup.py:108 activates the whole array as "
+               "Drop(128, 128, 1, 1), which is the reference for that.")
+    return "\n".join(out)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -368,10 +443,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     row, col = args.at or (SP.SPLIT_ROOT_ROW, SP.SPLIT_ROOT_COL)
     root = SP.DropNode(id="d", parent=None, stage=0, height=20, width=20,
                        row=row, col=col)
+    walk = not args.no_walk
     approach_from = (
         SP.DropNode(id="d", parent=None, stage=0, height=20, width=20,
-                    row=args.walk_from[0], col=args.walk_from[1])
-        if args.walk_from else None)
+                    row=args.load_at[0], col=args.load_at[1])
+        if (walk and args.load_at) else None)
 
     # ── plan-only: no USB handle, no backend, nothing energised ──────────────
     if args.plan_only:
@@ -382,8 +458,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ClearanceViolation as exc:
             print(exc)
             return 2
-        if approach_from is not None:
-            app = SP.plan_approach(approach_from, row, col)
+        if walk:
+            app = SP.plan_approach(approach_from or SP.load_root(), row, col)
             SP.require_approach_clearance(app, cfg,
                                           args.allow_clearance_violations)
             print(f"approach {app.from_rc} -> {app.to_rc}: {app.electrodes} "
@@ -395,20 +471,79 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{verdict}. Nothing was energised and no USB handle was opened.")
         return 0
 
+    # ── --dump: exactly what the DLL would be handed. No hardware. ───────────
+    if args.dump:
+        h, w = _size(args.size) if args.poke else (20, 20)
+        r, c = args.poke or (row, col)
+        print(describe_call(cfg.rows, cfg.cols, [Drop(h, w, r, c)]))
+        return 0
+
     # ── a real session ───────────────────────────────────────────────────────
     backend = make_backend(args.backend, args.dll_dir, DEFAULT_DLL_NAME,
                            cfg.rows, cfg.cols)
+    is_fake = type(backend).__name__ == "FakeBackend"
+
+    # Say which rig this is, before anything else. The rail check cannot tell
+    # you: FakeBackend stores what SetVolt was given and hands it straight back
+    # to InquireVolt, so it reports "Rails match: commanded [45,45,45,...],
+    # measured [45,45,45,...]" exactly like a healthy real one. An armed run
+    # against the fake rig is therefore indistinguishable from a successful run
+    # in every log line -- except this one.
+    print(f"BACKEND: {type(backend).__name__}"
+          + (f"  <- NOT the hardware. No electrode can move." if is_fake
+             else f"  ({args.dll_dir})"))
+    if is_fake and args.arm and not args.allow_fake_arm:
+        print("\nRefusing to --arm against the fake backend.\n"
+              "  This is almost always one of two things:\n"
+              "    * you are running under WSL/Linux. The vendor DLLs are\n"
+              "      Windows x64 PE binaries and cannot load there, so\n"
+              "      --backend auto silently falls back to the fake rig.\n"
+              "      Use the Windows interpreter:\n"
+              "        .\\.venv\\Scripts\\python.exe -m microdrop.protocol --arm\n"
+              "    * the DLL did not load from --dll-dir (wrong path, or a\n"
+              "      missing dependency such as libusb-1.0.dll).\n"
+              "  Pass --backend real to see the load error instead of a\n"
+              "  fallback, or --allow-fake-arm if a fake armed run is what you\n"
+              "  actually want.")
+        return 4
+
     chip = ChipController(backend, cfg.rows, cfg.cols, cfg.volts,
                           armed=args.arm, step_delay_s=args.step_delay,
                           volt_tolerance=cfg.volt_tolerance,
                           volt_settle_s=cfg.volt_settle_s,
                           power_settle_s=cfg.power_settle_s,
-                          allow_violations=args.allow_clearance_violations)
+                          allow_violations=args.allow_clearance_violations,
+                          log_frames=args.log_frames)
+
+    # ── --poke: one electrode rectangle, one call, nothing else ──────────────
+    if args.poke:
+        h, w = _size(args.size)
+        drop = Drop(h, w, args.poke[0], args.poke[1])
+        with chip:
+            print(chip.verify_voltage().summary())
+            print()
+            print(describe_call(cfg.rows, cfg.cols, [drop]))
+            chip.activate([drop], settle=False)
+            print()
+            print(chip.rc_summary())
+            if not chip.armed:
+                print("\nDRY RUN: that call was never issued. Add --arm.")
+            else:
+                print("\nThere is no per-electrode readback in this API, so "
+                      "nothing here can confirm the electrode switched.\n"
+                      "Look at the chip now: is that rectangle holding?")
+                # Only block if there is someone to unblock it. Piped or
+                # scripted, holding forever is not a useful default.
+                if sys.stdin is not None and sys.stdin.isatty():
+                    input(">>> press Enter to de-energise ")
+                else:
+                    print("(stdin is not a terminal -- de-energising now)")
+        return 0
 
     confirm = (lambda q, detail="": True) if args.yes else console_confirm
     session = SplitSession(
         chip=chip, root=root, axes=args.axes, cfg=cfg,
-        approach_from=approach_from, confirm=confirm,
+        transport=walk, approach_from=approach_from, confirm=confirm,
         allow_violations=args.allow_clearance_violations)
     if args.yes:
         session.notes.append(

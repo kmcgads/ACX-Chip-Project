@@ -19,6 +19,7 @@ unverified; see test_volume_equality_is_not_claimed.
 import itertools
 import unittest
 
+from chiphealth import clearance
 from chiphealth.clearance import ClearanceViolation
 from chiphealth.config import ChipConfig
 from microdrop import params as P
@@ -723,16 +724,39 @@ class TestSplitPosition(unittest.TestCase):
             gaps = (r0 - 1, 128 - r1, c0 - 1, 128 - c1)
             self.assertEqual(gaps, expected, axes)
 
-    def test_the_approach_walks_the_droplet_there(self):
+    def test_the_approach_walks_from_the_load_position_to_the_split_position(self):
+        """The protocol as specified: load at row 5 col 55, move to row 55
+        col 55. Load and split share a column, so this is one straight leg
+        of 50 rows with no corner -- two frames each, grow then release."""
         approach, root = SP.approach_to_split()
-        self.assertEqual(approach.from_rc, (5, 10))
+        self.assertEqual(approach.from_rc, (SP.SPLIT_LOAD_ROW, SP.SPLIT_LOAD_COL))
+        self.assertEqual(approach.from_rc, (5, 55))
         self.assertEqual(approach.to_rc, (55, 55))
-        self.assertEqual(root.row, 55)
-        self.assertEqual(root.col, 55)
-        # 50 rows + 45 cols, two frames each -- grow, then release.
-        self.assertEqual(approach.electrodes, 95)
-        self.assertEqual(approach.n_frames, 190)
-        self.assertAlmostEqual(approach.duration_s(), 95.0)
+        self.assertEqual((root.row, root.col), (55, 55))
+        self.assertEqual(approach.electrodes, 50)
+        self.assertEqual(approach.n_frames, 100)
+        self.assertAlmostEqual(approach.duration_s(), 50.0)
+        # No column leg at all: every frame sits in column 55.
+        self.assertEqual({d.col for f in approach.frames for d in f.drops},
+                         {55})
+
+    def test_the_load_position_needs_no_split_clearance(self):
+        """A load is a plain hold. Only the SPLIT needs the tree's margin, and
+        by then the droplet is elsewhere -- which is what lets the load
+        position be dictated by where the operator can reach."""
+        load = SP.load_root()
+        self.assertEqual((load.row, load.col), (5, 55))
+        self.assertEqual((load.height, load.width), (20, 20))
+        self.assertTrue(clearance.fits([load.bounds()], 128, 128))
+        # It could not host the tree, and does not have to.
+        self.assertFalse(SP.check_root(load).ok)
+
+    def test_walking_from_the_sweep_position_would_cost_nearly_twice_as_much(self):
+        """Why the load column matters: (5,10) needs an L-turn, (5,55) does not."""
+        far, _ = SP.approach_to_split(load=default_root())
+        self.assertEqual(far.electrodes, 95)
+        near, _ = SP.approach_to_split()
+        self.assertEqual(near.electrodes, 50)
 
     def test_every_approach_frame_only_grows_or_only_releases(self):
         """The discipline the 2026-08-10 break-up bought.
@@ -763,11 +787,11 @@ class TestSplitPosition(unittest.TestCase):
                 grows += bool(added)
                 releases += bool(removed)
             prev = cells
-        # 95 electrodes of travel, one grow and one release each, strictly
+        # 50 electrodes of travel, one grow and one release each, strictly
         # alternating. The very first frame is a grow with nothing before it to
-        # compare against, so 94 grows are observed and all 95 releases are.
-        self.assertEqual(approach.n_frames, 190)
-        self.assertEqual((grows, releases), (94, 95))
+        # compare against, so 49 grows are observed and all 50 releases are.
+        self.assertEqual(approach.n_frames, 100)
+        self.assertEqual((grows, releases), (49, 50))
 
     def test_the_approach_never_shrinks_the_droplet(self):
         """It relocates a 20x20; it must not resize one. The tree needs the

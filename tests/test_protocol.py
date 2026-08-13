@@ -88,66 +88,90 @@ class TestNoVisionStack(unittest.TestCase):
 
         self.assertTrue(still_absent, "the vision stack was imported after all")
         self.assertIn("VOLUME EQUALITY", report)
-        self.assertEqual(frames, 88)          # 87 tree frames + the hold frame
-        self.assertEqual(len(op.asked), 4)    # the operator really was gating
+        # 1 hold + 100 approach (50 electrodes, grow+release) + 87 tree.
+        self.assertEqual(frames, 188)
+        self.assertEqual(len(op.asked), 5)    # the operator really was gating
 
-    def test_the_protocol_module_imports_nothing_from_the_vision_stack(self):
-        """Static check, so the failure names the offending module.
+    #: chiphealth modules that need numpy or a camera. The split path reaches
+    #: none of them; everything it does need (config, actuation, clearance,
+    #: sweep) is pure standard library.
+    VISION_MODULES = {"cv2", "numpy", "chiphealth.geometry",
+                      "chiphealth.detector", "chiphealth.calibration",
+                      "geometry", "detector", "calibration"}
 
-        `geometry`, `detector` and `calibration` are the three chiphealth
-        modules that need numpy or a camera; the split path must reach none of
-        them.
-        """
-        import inspect
-        for mod in (PR, SP):
-            src = inspect.getsource(mod)
-            for banned in ("import cv2", "import numpy", "geometry",
-                           "detector", "calibration"):
-                offending = [ln for ln in src.splitlines()
-                             if banned in ln
-                             and ln.lstrip().startswith(("import ", "from "))]
-                self.assertEqual(offending, [], f"{mod.__name__}: {offending}")
+    #: Names that only exist to serve a camera. Referencing any of them would
+    #: mean a pixel had got into a path that deals in electrode indices.
+    VISION_NAMES = {"ElectrodeFrame", "load_cache", "corners_px",
+                    "pixel_to_electrode", "electrode_to_pixel",
+                    "area_px_to_electrodes", "set_registration",
+                    "check_registration", "apply_homography"}
 
-    def test_no_calibration_is_consumed_even_from_an_earlier_run(self):
-        """It does not read a calibration done separately either.
-
-        There are no pixel coordinates anywhere in this path -- only electrode
-        indices -- so there is nothing for a homography to be needed for.
-        Checked on the CODE, with every docstring stripped -- module, class and
-        function. The prose deliberately names `calibration.json` and
-        `corners_px` in order to say they are never touched, and a plain text
-        search cannot tell that apart from touching them.
-        """
+    def _ast(self, mod):
         import ast
         import inspect
+        return ast.parse(inspect.getsource(mod))
 
-        def code_only(src: str) -> str:
-            tree = ast.parse(src)
-            for node in ast.walk(tree):
-                body = getattr(node, "body", None)
-                if (isinstance(body, list) and body
-                        and isinstance(body[0], ast.Expr)
-                        and isinstance(getattr(body[0], "value", None), ast.Constant)
-                        and isinstance(body[0].value.value, str)):
-                    body.pop(0)
-            return ast.unparse(tree)
+    def test_neither_module_imports_the_vision_stack(self):
+        """Checked on the AST, not on the text.
 
+        A substring search over the source cannot tell a reference apart from
+        prose promising the absence of one -- and both modules contain that
+        prose deliberately, in docstrings and in `--help`. So this walks import
+        nodes and nothing else.
+        """
+        import ast
         for mod in (PR, SP):
-            body = code_only(inspect.getsource(mod))
-            for banned in ("calibration", "load_cache", "corners_px",
-                           "homography", "pixel_to_electrode", "ElectrodeFrame"):
-                self.assertNotIn(banned, body, f"{mod.__name__}: {banned}")
+            imported = set()
+            for node in ast.walk(self._ast(mod)):
+                if isinstance(node, ast.Import):
+                    imported |= {a.name.split(".")[0] for a in node.names}
+                elif isinstance(node, ast.ImportFrom):
+                    base = (node.module or "")
+                    imported.add(base)
+                    imported |= {f"{base}.{a.name}" for a in node.names}
+            self.assertEqual(imported & self.VISION_MODULES, set(),
+                             f"{mod.__name__} imports the vision stack")
+
+    def test_neither_module_references_a_camera_only_name(self):
+        """Catches a reference reached indirectly, without an import of its own."""
+        import ast
+        for mod in (PR, SP):
+            used = set()
+            for node in ast.walk(self._ast(mod)):
+                if isinstance(node, ast.Attribute):
+                    used.add(node.attr)
+                elif isinstance(node, ast.Name):
+                    used.add(node.id)
+            self.assertEqual(used & self.VISION_NAMES, set(),
+                             f"{mod.__name__} reaches for a camera-only name")
+
+    def test_no_calibration_file_path_is_opened(self):
+        """It does not consume a calibration done separately, either.
+
+        There are no pixel coordinates anywhere in this path -- only electrode
+        indices -- so there is nothing a homography could be needed for. This
+        looks for filesystem access rather than for the word: the modules name
+        `calibration.json` in prose precisely to promise they never read it.
+        """
+        import ast
+        for mod in (PR, SP):
+            called = {n.func.id for n in ast.walk(self._ast(mod))
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            self.assertEqual(called & {"open", "load_cache"}, set(),
+                             f"{mod.__name__} opens a file")
 
 
 class TestGates(unittest.TestCase):
 
-    def test_it_asks_before_loading_and_at_every_stage(self):
+    def test_it_asks_before_loading_at_arrival_and_at_every_stage(self):
+        """The protocol as specified: load at row 5 col 55, move to row 55
+        col 55, split. So five gates -- load, arrival, and three stages."""
         s, op = session()
         s.run()
-        # 1 load gate + one per stage of a 3-stage tree. No approach here.
-        self.assertEqual(len(op.asked), 4)
-        self.assertIn("loaded at row 55, col 55", op.asked[0])
-        for i, q in enumerate(op.asked[1:]):
+        self.assertEqual(len(op.asked), 5)
+        self.assertIn("loaded at row 5, col 55", op.asked[0])
+        self.assertIn("arrive at row 55, col 55", op.asked[1])
+        for i, q in enumerate(op.asked[2:]):
             self.assertIn(f"Stage {i}", q)
 
     def test_a_no_at_the_load_gate_stops_the_run(self):
@@ -157,20 +181,21 @@ class TestGates(unittest.TestCase):
         self.assertEqual(len(op.asked), 1)
 
     def test_a_no_mid_tree_stops_before_the_next_stage(self):
-        s, op = session(Operator([True, True, False]))
+        # load, arrival, stage 0, then refuse at stage 1.
+        s, op = session(Operator([True, True, True, False]))
         with self.assertRaises(OperatorAbort):
             s.run()
-        # Stage 0 and 1 frames went out; stage 2's did not.
-        self.assertEqual(len(op.asked), 3)
-        stage2 = [f for st in s.plan.steps if st.stage == 2 for f in st.frames]
-        self.assertEqual(len(s.chip.intended),
-                         s.plan.n_frames - len(stage2) + 1)  # +1 = hold frame
+        self.assertEqual(len(op.asked), 4)
+        later = [f for st in s.plan.steps if st.stage == 2 for f in st.frames]
+        self.assertEqual(
+            len(s.chip.intended),
+            1 + s.approach.n_frames + s.plan.n_frames - len(later))
 
     def test_every_answer_is_recorded(self):
         """The only artifact a camera-free run produces."""
         s, op = session()
         s.run()
-        self.assertEqual([a for _, a in s.log], ["yes"] * 4)
+        self.assertEqual([a for _, a in s.log], ["yes"] * 5)
         self.assertIn("[yes]", s.report())
 
     def test_the_load_gate_warns_about_an_undersized_droplet(self):
@@ -212,20 +237,21 @@ class TestEnergising(unittest.TestCase):
 
         SplitSession(chip=c, confirm=confirm, announce=op.announce).run()
         self.assertEqual(order[0][0], "activate")
-        self.assertEqual(order[0][1], ((55, 55),))
+        self.assertEqual(order[0][1], ((5, 55),))   # the LOAD position
         self.assertEqual(order[1][0], "ask")
 
     def test_a_dry_run_energises_nothing_but_still_gates(self):
         s, op = session(chip=chip(armed=False))
         s.run()
         self.assertEqual(s.chip.frames_sent, 0)
-        self.assertEqual(len(op.asked), 4)
+        self.assertEqual(len(op.asked), 5)
         self.assertTrue(any("DRY-RUN" in m for m in op.told))
 
     def test_all_frames_reach_the_chip_in_an_armed_run(self):
         s, op = session()
         s.run()
-        self.assertEqual(s.chip.frames_sent, s.plan.n_frames + 1)  # + hold
+        self.assertEqual(s.chip.frames_sent,
+                         1 + s.approach.n_frames + s.plan.n_frames)
 
 
 class TestClearanceStillGates(unittest.TestCase):
@@ -239,39 +265,52 @@ class TestClearanceStillGates(unittest.TestCase):
         self.assertEqual(s.chip.frames_sent, 0)
 
     def test_the_override_still_has_to_be_asked_for(self):
-        s, op = session(root=SP.default_root(), allow_violations=True)
+        s, op = session(root=SP.default_root(), transport=False,
+                        allow_violations=True)
         import logging
         logging.disable(logging.ERROR)
         try:
             s.run()
         finally:
             logging.disable(logging.NOTSET)
-        self.assertEqual(len(op.asked), 4)
+        self.assertEqual(len(op.asked), 4)   # no arrival gate: transport off
 
 
 class TestApproach(unittest.TestCase):
     """Walking in is optional, and confirmed on arrival when used."""
 
-    def test_no_approach_by_default(self):
+    def test_the_walk_is_the_default_and_runs_from_the_load_position(self):
         s, _ = session()
-        self.assertIsNone(s.approach)
+        self.assertIsNotNone(s.approach)
+        self.assertEqual(s.approach.from_rc, (SP.SPLIT_LOAD_ROW,
+                                              SP.SPLIT_LOAD_COL))
+        self.assertEqual(s.approach.to_rc, (SP.SPLIT_ROOT_ROW,
+                                            SP.SPLIT_ROOT_COL))
 
-    def test_walking_in_adds_an_arrival_gate(self):
-        s, op = session(approach_from=SP.default_root())
+    def test_sharing_a_column_makes_it_one_straight_leg(self):
+        """Load and split share column 55, so the walk has no corner: 50
+        electrodes down, against 95 and an L-turn from the sweep position."""
+        s, _ = session()
+        self.assertEqual(s.approach.electrodes, 50)
+        self.assertEqual(s.approach.n_frames, 100)
+        cols = {d.col for f in s.approach.frames for d in f.drops}
+        self.assertEqual(cols, {SP.SPLIT_LOAD_COL})
+
+    def test_transport_false_skips_it_entirely(self):
+        s, op = session(transport=False)
         s.run()
-        self.assertEqual(len(op.asked), 5)
-        self.assertIn("arrive at row 55, col 55", op.asked[1])
-        self.assertIn("nothing left behind", op.asked[1])
+        self.assertIsNone(s.approach)
+        self.assertEqual(len(op.asked), 4)
 
     def test_the_arrival_gate_is_about_the_loss_nothing_else_can_see(self):
-        s, op = session(approach_from=SP.default_root())
+        s, op = session()
         s.run()
-        self.assertEqual(s.approach.electrodes, 95)
+        self.assertIn("nothing left behind", op.asked[1])
         self.assertEqual(s.chip.frames_sent,
                          1 + s.approach.n_frames + s.plan.n_frames)
 
     def test_a_no_on_arrival_stops_before_the_tree(self):
-        s, op = session(Operator([True, False]), approach_from=SP.default_root())
+        s, op = session(Operator([True, False]))
         with self.assertRaises(OperatorAbort):
             s.run()
         self.assertEqual(s.chip.frames_sent, 1 + s.approach.n_frames)
@@ -304,6 +343,9 @@ class TestCommandLine(unittest.TestCase):
     """`python -m microdrop.protocol` -- the entry point the operator types."""
 
     def _main(self, *argv):
+        # --step-delay 0: these exercise the entry point, not the dwell, and
+        # the real 0.5s default would make this class sleep for well over a
+        # minute of wall clock for no added coverage.
         import contextlib
         import io
         import logging
@@ -311,7 +353,7 @@ class TestCommandLine(unittest.TestCase):
         logging.disable(logging.CRITICAL)
         try:
             with contextlib.redirect_stdout(out):
-                rc = PR.main(["--backend", "fake", *argv])
+                rc = PR.main(["--backend", "fake", "--step-delay", "0", *argv])
         finally:
             logging.disable(logging.NOTSET)
         return rc, out.getvalue()
@@ -341,12 +383,21 @@ class TestCommandLine(unittest.TestCase):
         self.assertIn("16 pieces", out)
         self.assertIn("25 electrodes each", out)
 
-    def test_the_walk_is_opt_in(self):
-        rc, plain = self._main("--plan-only")
-        self.assertNotIn("approach", plain)
-        rc, walked = self._main("--plan-only", "--walk-from", "5,10")
+    def test_the_walk_is_on_by_default_and_is_50_electrodes(self):
+        rc, out = self._main("--plan-only")
         self.assertEqual(rc, 0)
-        self.assertIn("95 electrodes, 190 frames", walked)
+        self.assertIn("(5, 55) -> (55, 55)", out)
+        self.assertIn("50 electrodes, 100 frames", out)
+
+    def test_no_walk_removes_it(self):
+        rc, out = self._main("--plan-only", "--no-walk")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("approach", out)
+
+    def test_load_at_overrides_the_load_position(self):
+        rc, out = self._main("--plan-only", "--load-at", "5,10")
+        self.assertEqual(rc, 0)
+        self.assertIn("95 electrodes, 190 frames", out)
 
     def test_dry_run_is_the_default_and_says_so_in_the_report(self):
         rc, out = self._main("--yes")
@@ -360,9 +411,57 @@ class TestCommandLine(unittest.TestCase):
         self.assertIn("this run verified NOTHING", out)
 
     def test_an_armed_run_actually_energises(self):
-        rc, out = self._main("--yes", "--arm", "--step-delay", "0")
+        rc, out = self._main("--yes", "--arm", "--allow-fake-arm")
         self.assertEqual(rc, 0)
         self.assertNotIn("DRY RUN: no electrode", out)
+
+    def test_arming_the_fake_backend_is_refused_by_default(self):
+        """The bring-up trap: a fake rig satisfies the rail check exactly like
+        a real one, so an accidental fake armed run reads as a success that
+        moved no liquid. Exit 4, and the message names the WSL cause."""
+        rc, out = self._main("--yes", "--arm")
+        self.assertEqual(rc, 4)
+        self.assertIn("Refusing to --arm against the fake backend", out)
+        self.assertIn("WSL", out)
+        self.assertIn(".venv\\Scripts\\python.exe", out)
+
+    def test_the_backend_is_named_before_anything_else(self):
+        """The one line that distinguishes a real run from a fake one."""
+        rc, out = self._main("--yes")
+        self.assertTrue(out.startswith("BACKEND: FakeBackend"), out[:80])
+        self.assertIn("NOT the hardware", out)
+
+    def test_dump_prints_the_exact_struct_and_touches_nothing(self):
+        rc, out = self._main("--dump")
+        self.assertEqual(rc, 0)
+        self.assertIn("Drop(20, 20, 55, 55)", out)
+        self.assertIn("(height, width, row, col)", out)
+        self.assertIn("rows 55..74, cols 55..74", out)
+        self.assertIn("400 electrodes", out)
+        self.assertNotIn("BACKEND", out)          # no backend was constructed
+
+    def test_dump_honours_poke_and_size(self):
+        rc, out = self._main("--dump", "--poke", "1,1", "--size", "1x1")
+        self.assertIn("Drop(1, 1, 1, 1)", out)
+        self.assertIn("rows 1..1, cols 1..1", out)
+
+    def test_poke_sends_exactly_one_frame(self):
+        rc, out = self._main("--poke", "55,55")
+        self.assertEqual(rc, 0)
+        self.assertIn("Drop(20, 20, 55, 55)", out)
+        self.assertIn("DRY RUN: that call was never issued", out)
+
+    def test_poke_reports_every_return_code_not_just_activate(self):
+        """Singling out ActivateElec's rc is what made the first version
+        misleading -- SetPower and SetVolt returned the same 0 and nothing
+        said so. All of them are shown together, with the caveat attached."""
+        rc, out = self._main("--poke", "55,55", "--arm", "--allow-fake-arm")
+        self.assertEqual(rc, 0)
+        self.assertIn("DLL return codes this session:", out)
+        for call in ("SetPower", "SetVolt", "InquireVolt", "ActivateElec"):
+            self.assertIn(call, out)
+        self.assertIn("Only OpenUSB's convention is evidenced", out)
+        self.assertIn("no per-electrode readback", out)
 
     def test_bad_axes_and_bad_position_are_argparse_errors(self):
         for bad in (("--axes", "XYZ"), ("--at", "nonsense")):

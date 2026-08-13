@@ -402,6 +402,93 @@ class TestVoltageDiagnosticFlag(unittest.TestCase):
         self.assertEqual(polls, int(1.0 / 0.25) + 1)   # 4 polls + the one read
 
 
+class TestActivateReturnCode(unittest.TestCase):
+    """ActivateElec's rc is the only status the hardware gives for an
+    actuation. It was computed and discarded until 2026-08-13, which made "the
+    DLL refused the call" and "the DLL accepted it and nothing moved"
+    indistinguishable from Python -- the two halves of a bring-up problem."""
+
+    class Refusing(FakeBackend):
+        def activate_elec(self, rows, cols, drops):
+            super().activate_elec(rows, cols, drops)
+            return 0                      # OpenUSB's convention: falsy = failed
+
+    class Erroring(FakeBackend):
+        def activate_elec(self, rows, cols, drops):
+            super().activate_elec(rows, cols, drops)
+            return -1                     # libusb error codes are negative
+
+    def test_zero_is_NOT_treated_as_a_failure(self):
+        """The correction of 2026-08-13.
+
+        An earlier version warned that rc=0 meant the call was REFUSED,
+        generalising OpenUSB's `if res:` to a call no legacy script tests. On
+        the instrument SetVolt also returned 0 while demonstrably working (the
+        rails came back in the exact commanded pattern), and InquireVolt
+        returned 18 -- the byte count of the response analysis.md §2
+        disassembled. So 0 is the normal value for a write-only command, and
+        warning about it pointed at software while the calls were being
+        accepted.
+        """
+        chip = controller(armed=True, backend=self.Refusing(rows=ROWS, cols=COLS))
+        chip.open()
+        with self.assertNoLogs("chiphealth.actuation", level="WARNING"):
+            chip.activate([Drop(20, 20, 55, 55)])
+
+    def test_a_negative_return_is_warned_about(self):
+        """Unambiguous under either reading: libusb errors are negative, and a
+        byte count cannot be."""
+        chip = controller(armed=True, backend=self.Erroring(rows=ROWS, cols=COLS))
+        chip.open()
+        with self.assertLogs("chiphealth.actuation", level="WARNING") as log:
+            chip.activate([Drop(20, 20, 55, 55)])
+        self.assertIn("rc=-1", "\n".join(log.output))
+
+    def test_every_dll_call_is_recorded_not_just_activate(self):
+        """The inconsistency that made the first warning misleading: SetPower
+        and SetVolt returned 0 too, and nothing said so."""
+        chip = controller(armed=True)
+        chip.open()
+        chip.activate([Drop(20, 20, 55, 55)])
+        calls = [c for c, _ in chip.rc_log]
+        for expected in ("InitUSB", "OpenUSB", "SetPower", "SetVolt",
+                         "InquireVolt", "ActivateElec"):
+            self.assertIn(expected, calls)
+
+    def test_the_summary_states_the_convention_is_unpinned(self):
+        chip = controller(armed=True)
+        chip.open()
+        text = chip.rc_summary()
+        self.assertIn("Only OpenUSB's convention is evidenced", text)
+        self.assertIn("BYTE COUNTS", text)
+
+    def test_a_truthy_return_is_not_warned_about(self):
+        chip = controller(armed=True)
+        chip.open()
+        with self.assertNoLogs("chiphealth.actuation", level="WARNING"):
+            chip.activate([Drop(20, 20, 55, 55)])
+
+    def test_the_last_return_code_is_kept(self):
+        chip = controller(armed=True)
+        chip.open()
+        self.assertIsNone(chip.last_activate_rc)
+        chip.activate([Drop(20, 20, 55, 55)])
+        self.assertEqual(chip.last_activate_rc, 1)
+
+    def test_log_frames_shows_the_exact_struct_fields(self):
+        """Bring-up needs to see what the DLL was handed, in its field order."""
+        chip = controller(armed=True, backend=FakeBackend(rows=ROWS, cols=COLS),
+                          log_frames=True)
+        chip.open()
+        with self.assertLogs("chiphealth.actuation", level="INFO") as log:
+            chip.activate([Drop(20, 20, 55, 55)])
+        self.assertIn("(20, 20, 55, 55)", "\n".join(log.output))
+
+    def test_frames_are_not_logged_by_default(self):
+        chip = controller(armed=True)
+        self.assertFalse(chip.log_frames)
+
+
 class TestValidation(unittest.TestCase):
 
     def test_rejects_off_chip_drop(self):
