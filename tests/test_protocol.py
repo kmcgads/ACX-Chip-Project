@@ -17,6 +17,7 @@ from chiphealth.config import ChipConfig
 from microdrop import protocol as PR
 from microdrop import splitplan as SP
 from microdrop.protocol import OperatorAbort, SplitSession
+from microdrop.splitplan import plan_tree, require_clearance
 
 ROWS = COLS = 128
 
@@ -314,6 +315,71 @@ class TestApproach(unittest.TestCase):
         with self.assertRaises(OperatorAbort):
             s.run()
         self.assertEqual(s.chip.frames_sent, 1 + s.approach.n_frames)
+
+
+class TestSixteenPieces(unittest.TestCase):
+    """`--axes WHWH`: 16 pieces of 5x5, no new code, no new position.
+
+    The intermediate step before any 32-piece work. 20 = 2^2 x 5, so four
+    halvings is the ceiling for a 20x20 and 5x5 leaves are as small as this
+    tree can go -- a fifth split would have to halve a 5. If 5x5 does not hold
+    on the rig, 32 pieces cannot either, and this run finds that out in
+    130 seconds without a new load protocol.
+    """
+
+    AXES = ("W", "H", "W", "H")
+
+    def test_it_plans_clean_at_the_verified_positions(self):
+        plan = plan_tree(SP.split_root(), self.AXES)
+        self.assertEqual(require_clearance(plan).ok, True)
+        # Zero violations covers overlap and separation, not just the edge.
+        self.assertEqual(plan.violations, [])
+
+    def test_sixteen_uniform_five_by_five_leaves(self):
+        plan = plan_tree(SP.split_root(), self.AXES)
+        self.assertEqual(len(plan.leaves), 16)
+        self.assertEqual({(n.height, n.width) for n in plan.leaves}, {(5, 5)})
+
+    def test_the_leaves_are_evenly_spaced_and_well_separated(self):
+        """120 pairs at 16 pieces -- the count where crowding would show up
+        first, and the check I had not run before recommending it."""
+        import itertools as it
+        plan = plan_tree(SP.split_root(), self.AXES)
+        seps = [SP._separation(a.bounds(), b.bounds())
+                for a, b in it.combinations(plan.leaves, 2)]
+        self.assertEqual(len(seps), 120)
+        self.assertGreaterEqual(min(seps), 2)          # the planner's floor
+        rows = sorted({n.row for n in plan.leaves})
+        cols = sorted({n.col for n in plan.leaves})
+        self.assertEqual({b - a for a, b in zip(rows, rows[1:])}, {13})
+        self.assertEqual({b - a for a, b in zip(cols, cols[1:])}, {13})
+
+    def test_the_pieces_are_equal_by_the_proxy(self):
+        eq = SP.volume_equality(plan_tree(SP.split_root(), self.AXES))
+        self.assertTrue(eq.equal)
+        self.assertEqual(eq.area_electrodes, 25)
+
+    def test_the_protocol_adds_one_gate_per_extra_stage(self):
+        s, op = session(axes=self.AXES)
+        s.run()
+        self.assertEqual(len(op.asked), 6)             # load + arrival + 4
+        self.assertIn("count 16 separate pieces", op.asked[-1])
+
+    def test_the_whole_run_is_260_frames(self):
+        s, op = session(axes=self.AXES)
+        s.run()
+        self.assertEqual(s.approach.n_frames, 100)
+        self.assertEqual(s.plan.n_frames, 159)
+        self.assertEqual(s.chip.frames_sent, 260)      # + the hold frame
+
+    def test_a_fifth_split_is_refused_not_approximated(self):
+        """The ceiling, stated as a failure. 20 = 2^2 x 5: after four halvings
+        both axes are 5, and there is no factor of 2 left on either. The
+        planner refuses rather than guessing which child gets the extra
+        electrode -- a 3/2 split would be a 50% volume difference."""
+        with self.assertRaises(ValueError) as ctx:
+            plan_tree(SP.split_root(), ("W", "H", "W", "H", "W"))
+        self.assertIn("even extent", str(ctx.exception))
 
 
 class TestReportIsHonest(unittest.TestCase):

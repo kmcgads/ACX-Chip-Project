@@ -356,11 +356,14 @@ def build_parser() -> "argparse.ArgumentParser":
                    help="'auto' uses the vendor DLL where it can load and a "
                         "fake rig otherwise -- so this is safe off-Windows. "
                         "(default: %(default)s)")
-    p.add_argument("--step-delay", type=float, default=P.PROVEN_SETTLE_S,
-                   metavar="S",
-                   help="Seconds after every frame. Default %(default)s "
-                        "matches csvvolcont.py:137 and Frame.settle_s, so the "
-                        "duration the plan reports is the duration you get.")
+    p.add_argument("--step-delay", type=float, default=None, metavar="S",
+                   help=f"Seconds after every frame. Defaults to "
+                        f"{P.PROVEN_SETTLE_S} when ARMED -- csvvolcont.py:137, "
+                        f"and it matches Frame.settle_s so the duration the "
+                        f"plan reports is the duration you get -- and to 0 for "
+                        f"a DRY RUN, where nothing is energised so no liquid "
+                        f"needs time to reflow. Same reasoning as "
+                        f"SweepConfig.dry_run_step_delay_s.")
     p.add_argument("--plan-only", action="store_true",
                    help="Print the plan, the clearance verdict and the volume "
                         "claim, then stop. Opens no USB handle and asks "
@@ -507,8 +510,16 @@ def main(argv: Sequence[str] | None = None) -> int:
               "  actually want.")
         return 4
 
+    # A dry run energises nothing, so nothing needs time to reflow. Charging it
+    # the proven 0.5s turns a 260-frame plumbing check into a 2-minute wait for
+    # no physical reason -- the same trap SweepConfig.dry_run_step_delay_s
+    # already documents for the chip-health sweep. An explicit --step-delay
+    # always wins, and the value actually used is printed below.
+    step_delay = (args.step_delay if args.step_delay is not None
+                  else (P.PROVEN_SETTLE_S if args.arm else 0.0))
+
     chip = ChipController(backend, cfg.rows, cfg.cols, cfg.volts,
-                          armed=args.arm, step_delay_s=args.step_delay,
+                          armed=args.arm, step_delay_s=step_delay,
                           volt_tolerance=cfg.volt_tolerance,
                           volt_settle_s=cfg.volt_settle_s,
                           power_settle_s=cfg.power_settle_s,
@@ -553,6 +564,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         session.notes.append(
             "DRY RUN: no electrode was energised, so no liquid moved. The "
             "geometry and the gate sequence are exercised; nothing else is.")
+    if step_delay != P.PROVEN_SETTLE_S:
+        # Never silent: a run timed differently from the proven dwell must not
+        # be mistaken later for one that used it.
+        session.notes.append(
+            f"step delay {step_delay}s, not the proven {P.PROVEN_SETTLE_S}s "
+            f"(csvvolcont.py:137).")
     if args.allow_clearance_violations:
         session.notes.append(
             "--allow-clearance-violations: geometry off the electrode array "
