@@ -127,7 +127,7 @@ def confirm(question: str, detail: str = "") -> bool:
         return False
 
 
-def check_geometry(session: SplitSession) -> None:
+def check_geometry(session: SplitSession) -> SP.Approach:
     """Refuse to run if the planner no longer produces the verified geometry.
 
     The whole value of this script is being the record of a run that worked on
@@ -135,8 +135,28 @@ def check_geometry(session: SplitSession) -> None:
     erosion pattern, a re-tuned neck gap -- the numbers below move, and a
     script that quietly ran the new geometry under the old name would destroy
     exactly the thing it exists to preserve.
+
+    Returns the approach, so the caller does not have to reach back into
+    `session.approach` and re-establish that it exists. See the refusal below.
     """
     plan, approach = session.plan, session.approach
+
+    # Checked first and raised immediately rather than collected into
+    # `problems` below, because it is a different kind of failure. Every other
+    # check here detects `splitplan` moving under a script that claims to be a
+    # fixed record. A missing approach cannot mean that: `SplitSession` only
+    # leaves it None when `transport` is False or `approach_from` is None, both
+    # of which are hardcoded above. So this fires for an edit to THIS file, and
+    # says so. Raising here is also what lets the return type promise a real
+    # Approach -- a type checker cannot tell that appending to `problems`
+    # guarantees the `if problems` raise below.
+    if approach is None:
+        raise SystemExit(
+            "\n  REFUSING TO RUN: no approach was planned, so the droplet would\n"
+            "  be split wherever it happened to be loaded rather than walked to\n"
+            "  the verified split position. The SplitSession in main() must keep\n"
+            f"  transport=True and approach_from set to row {LOAD_ROW}, col {LOAD_COL}.\n")
+
     leaves = {(n.height, n.width) for n in plan.leaves}
     problems = []
 
@@ -146,15 +166,12 @@ def check_geometry(session: SplitSession) -> None:
         problems.append(f"leaf sizes {sorted(leaves)}, expected {EXPECT_LEAF}")
     if plan.n_frames != EXPECT_TREE_FRAMES:
         problems.append(f"{plan.n_frames} tree frames, expected {EXPECT_TREE_FRAMES}")
-    if approach is None:
-        problems.append("no approach planned; this run must walk from the load position")
-    else:
-        if approach.electrodes != EXPECT_WALK_ELECTRODES:
-            problems.append(f"walk is {approach.electrodes} electrodes, "
-                            f"expected {EXPECT_WALK_ELECTRODES}")
-        if approach.n_frames != EXPECT_APPROACH_FRAMES:
-            problems.append(f"{approach.n_frames} approach frames, "
-                            f"expected {EXPECT_APPROACH_FRAMES}")
+    if approach.electrodes != EXPECT_WALK_ELECTRODES:
+        problems.append(f"walk is {approach.electrodes} electrodes, "
+                        f"expected {EXPECT_WALK_ELECTRODES}")
+    if approach.n_frames != EXPECT_APPROACH_FRAMES:
+        problems.append(f"{approach.n_frames} approach frames, "
+                        f"expected {EXPECT_APPROACH_FRAMES}")
     if plan.violations:
         problems.append(f"{len(plan.violations)} geometry violation(s)")
 
@@ -165,6 +182,8 @@ def check_geometry(session: SplitSession) -> None:
             + "\n  microdrop/splitplan.py has changed since 2026-08-13. Either\n"
               "  restore it, or re-verify on hardware and update the EXPECT_*\n"
               "  constants at the top of this file to match what you verified.\n")
+
+    return approach
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -228,14 +247,14 @@ def main() -> int:
         confirm=confirm,
         announce=lambda m: say("Split", m),
     )
-    check_geometry(session)
+    approach = check_geometry(session)
     if not args.arm:
         session.notes.append(
             "DRY RUN: nothing was energised, so no liquid moved. The gate "
             "sequence and the geometry were exercised; nothing else was.")
 
-    total = 1 + session.approach.n_frames + session.plan.n_frames
-    say("Plan", f"{total} frames, ~{session.approach.duration_s() + session.plan.duration_s():.0f}s "
+    total = 1 + approach.n_frames + session.plan.n_frames
+    say("Plan", f"{total} frames, ~{approach.duration_s() + session.plan.duration_s():.0f}s "
                 f"of dwell at {STEP_DELAY_S}s")
 
     with chip:
