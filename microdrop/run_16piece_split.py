@@ -203,9 +203,9 @@ from microdrop.protocol import OperatorAbort, SplitSession
 # change moves `split_root` or `DEFAULT_AXES`, this file must keep doing what it
 # says, or refuse. See check_geometry().
 
-LOAD_ROW, LOAD_COL = 5, 55      # where the operator loads the droplet
+LOAD_ROW, LOAD_COL = 5, 55 ##where droplet is loaded for movement
 SPLIT_ROW, SPLIT_COL = 55, 55   # where the tree runs
-DROPLET_H, DROPLET_W = 20, 20   # the starting droplet
+DROPLET_H, DROPLET_W = 30,30   # the starting droplet
 AXES = ("W", "H", "W", "H")     # 4 stages -> 16 pieces
 
 # THE TWO STAGES THAT FAILED LIVE, widened 2026-08-17. Stage 2 is 4->8 and
