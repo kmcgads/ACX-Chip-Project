@@ -11,21 +11,54 @@ equality by the activated-area proxy -- but no liquid has ever been through
 it. Nothing here should be cited as a result, and the header stays as it is
 until a live run is done and confirmed holding. At that point, and not
 before: change this header, tag the commit `split-16piece-verified`, and say
-what chip it ran on -- the way `run_8piece_split.py` does.
+what chip it ran on.
 
-WHAT IS ACTUALLY NEW HERE, AND IT IS ONLY ONE THING
-───────────────────────────────────────────────────
-The first three stages ARE the verified 8-piece run: same load position, same
-walk, same split position, same W -> H -> W prefix, frame for frame. This
-script adds a fourth stage. If stages 0-2 misbehave, that is a regression in
-something already proven and the interesting news is there, not at stage 3.
+⚠ STAGE 2 OF THIS TREE IS A SPLIT THAT HAS ALREADY FAILED ON HARDWARE
+─────────────────────────────────────────────────────────────────────
+Corrected 2026-08-17. This section used to say the first three stages were
+"the verified 8-piece run ... frame for frame". Both halves of that are now
+wrong.
 
+FIRST, THE 8-PIECE RUN IS NO LONGER LABELLED VERIFIED. A live run of it did
+not fully separate at its last stage -- the 10-wide W split that produces
+10x5 pieces. That is stage 2 of THIS tree, identical in axis and extents
+(10 -> two 5s, stretch 10 -> 18, gap 8, 9 frames). So this script does not
+merely inherit a proven prefix; it inherits, unchanged, the exact operation
+that failed. Expect it to fail here too, at stage 2, before stage 3 is ever
+reached.
+
+SECOND, THE PREFIX IS NO LONGER IDENTICAL ANYWAY. `run_8piece_split.py` has
+since widened its final stage to `final_stretch_ratio=2.2`, opening that
+split's neck gap from 8 to 12. This file passes no override, so its stage 2
+still runs at the proven 1.75 and a gap of 8. The two scripts now diverge at
+exactly the stage in question, and that divergence is deliberate and
+unresolved -- see the note at the bottom of this docstring.
+
+Stages 0 and 1 are still shared with the 8-piece run and still unmodified:
+20 -> 36 at the proven ratio, gap 16, 17 frames each.
+
+WHAT STAGE 3 WOULD ANSWER, IF IT IS EVER REACHED
+────────────────────────────────────────────────
 Stage 3 takes eight 10x5 pieces to sixteen 5x5 ones -- 1.232 x 1.232 mm, and
 that is the FLOOR for a 20x20 droplet. 20 = 2^2 x 5, so four halvings is all
 divisibility allows; a fifth would have to halve a 5, and the planner refuses
 rather than guess which child gets the extra electrode. So this run answers
 the last question this droplet can ask. If 5x5 does not hold, no 32-piece
 tree from a 20x20 can either, whatever else changes.
+
+But that question is downstream of the one stage 2 just answered badly.
+Running this before the 10 -> 5 split is reliable spends a chip loading on a
+tree that should stop at its third gate.
+
+THE UNRESOLVED DECISION
+───────────────────────
+This file has NOT been given the 8-piece script's widening, and that is a
+pending choice rather than a considered one. Applying `final_stretch_ratio`
+here would widen stage 3 only -- the LAST stage -- which is not the stage
+that failed. Fixing stage 2 in this tree needs a per-stage override that
+targets stage 2, which `SplitParams.for_stage` does not currently express:
+it knows only "the last stage". Whichever way that goes, it should follow the
+8-piece result, not precede it.
 
 Every parameter below is HARDCODED, for the same reason as in the 8-piece
 script: the moment this file can be pointed at a different geometry it stops
@@ -91,12 +124,14 @@ from microdrop import splitplan as SP
 from microdrop.protocol import OperatorAbort, SplitSession
 
 # ── The candidate configuration ───────────────────────────────────────────────
-# The load position, the walk and the split position are exactly the verified
-# 8-piece ones -- unchanged on purpose, so the only variable in this run is the
-# fourth split. Written out rather than read from splitplan's defaults for the
-# same reason as in the 8-piece script: if a later change moves `split_root` or
-# `DEFAULT_AXES`, this file must keep doing what it says, or refuse.
-# See check_geometry().
+# The load position, the walk and the split position are the same ones the
+# 8-piece script uses -- unchanged on purpose. Note that this no longer makes
+# the fourth split the only variable: since 2026-08-17 the 8-piece script also
+# widens its final stage, and this file does not, so stage 2 differs between
+# them as well. See the docstring. Written out rather than read from
+# splitplan's defaults for the same reason as in the 8-piece script: if a later
+# change moves `split_root` or `DEFAULT_AXES`, this file must keep doing what it
+# says, or refuse. See check_geometry().
 
 LOAD_ROW, LOAD_COL = 5, 55      # where the operator loads the droplet
 SPLIT_ROW, SPLIT_COL = 55, 55   # where the tree runs
@@ -245,7 +280,10 @@ def main() -> int:
           f" to row {SPLIT_ROW}, col {SPLIT_COL}")
     print(f"  split    {' -> '.join(AXES)}  ->  {EXPECT_PIECES} pieces of "
           f"{EXPECT_LEAF[0]}x{EXPECT_LEAF[1]}")
-    print(f"  status   stages 0-2 are the verified 8-piece run; stage 3 is new")
+    print(f"  status   stages 0-1 shared with the 8-piece run and unchanged")
+    print(f"  WARNING  stage 2 (10 -> two 5s, gap 8) is the split that FAILED")
+    print(f"           live in the 8-piece run. Unwidened here. Expect trouble")
+    print(f"           at gate 5 of 6 (the count of 8), before stage 3")
     print(f"  mode     {'ARMED — electrodes will be energised' if args.arm else 'DRY RUN — nothing will be energised'}")
 
     # ── Rig ────────────────────────────────────────────────────────────────

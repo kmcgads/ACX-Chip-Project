@@ -162,7 +162,6 @@ STEP_DELAY_S = P.PROVEN_SETTLE_S    # 0.5s, csvvolcont.py:137
 BAR = "=" * 68
 RULE = "─" * 60
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def banner(title: str) -> None:
