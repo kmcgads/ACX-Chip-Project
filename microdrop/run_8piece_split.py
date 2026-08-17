@@ -29,11 +29,22 @@ and none is needed. The consequence is that YOU are the only verification:
 this API has no per-electrode readback, so the four y/n gates below are the
 sole evidence that anything actuated. Answering `n` at any gate stops the run.
 
-NOTE — dry run is the default
-─────────────────────────────
-Without --arm nothing is energised: the frames are planned, gated and logged
-but SetPower/SetVolt/ActivateElec are never issued. Use that to rehearse the
-prompts. Add --arm for a real run.
+NOTE — THIS SCRIPT IS ALWAYS ARMED
+──────────────────────────────────
+There is no dry run. Running this file energises the chip: opening it issues
+SetPower(True) and SetVolt, so THE RAILS COME UP BEFORE YOU ARE ASKED
+ANYTHING. The first gate -- the phase 0 voltage confirmation -- happens with
+45V already commanded, and answering `n` there stops the run before any
+electrode is activated, but not before the supply is live.
+
+`--arm` is still accepted so old muscle memory does not error out at the rig,
+but it does nothing.
+
+For a check that touches no hardware, this is not the script. Use:
+
+    python -m microdrop.protocol --plan-only
+
+which opens no USB handle, asks nothing and energises nothing.
 
 NOTE — relationship to microdrop/protocol.py
 ────────────────────────────────────────────
@@ -44,8 +55,7 @@ which are covered by the test suite. Nothing about the split is recomputed
 here. What this file owns is the hardcoding, the presentation and the refusal
 to run against the wrong rig.
 
-Usage: python microdrop/run_8piece_split.py          (dry run)
-       python microdrop/run_8piece_split.py --arm    (live)
+Usage: python microdrop/run_8piece_split.py    (live -- there is no other mode)
 """
 
 import argparse
@@ -190,19 +200,26 @@ def check_geometry(session: SplitSession) -> SP.Approach:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Run the verified 8-piece split. Dry run unless --arm.")
-    ap.add_argument("--arm", action="store_true",
-                    help="Energise electrodes. Without this nothing is sent to "
-                         "the chip and no liquid moves.")
+        description="Run the verified 8-piece split. ALWAYS ARMED: running "
+                    "this script energises the chip. There is no dry run -- "
+                    "use `python -m microdrop.protocol --plan-only` for a "
+                    "check that touches no hardware.")
+    # Accepted and ignored. Kept only so that typing the flag this script used
+    # to need does not abort the run with `unrecognized arguments` at the rig.
+    ap.add_argument("--arm", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     banner("VERIFIED 8-PIECE SPLIT — 2026-08-13")
+    if args.arm:
+        say("Note", "--arm is accepted but no longer needed; this script is "
+                    "always armed.")
     print(f"  load     {DROPLET_H}x{DROPLET_W} at row {LOAD_ROW}, col {LOAD_COL}")
     print(f"  walk     {EXPECT_WALK_ELECTRODES} electrodes down column {LOAD_COL}"
           f" to row {SPLIT_ROW}, col {SPLIT_COL}")
     print(f"  split    {' -> '.join(AXES)}  ->  {EXPECT_PIECES} pieces of "
           f"{EXPECT_LEAF[0]}x{EXPECT_LEAF[1]}")
-    print(f"  mode     {'ARMED — electrodes will be energised' if args.arm else 'DRY RUN — nothing will be energised'}")
+    print(f"  mode     ARMED — the rails come up on connect and electrodes "
+          f"will be energised")
 
     # ── Rig ────────────────────────────────────────────────────────────────
     cfg = ChipConfig()
@@ -212,20 +229,23 @@ def main() -> int:
     say("Rig", f"{type(backend).__name__}"
         + ("  <- NOT the hardware" if is_fake else f"  ({DEFAULT_DLL_DIR})"))
 
-    if is_fake and args.arm:
+    if is_fake:
         # A fake rig satisfies the rail check identically to a real one, so an
-        # accidental fake armed run reads as a success that moved no liquid.
-        # This cost a debugging session on 2026-08-13; it does not get to
-        # happen again quietly.
-        print("\n  The vendor DLL did not load, so --arm would energise nothing.\n"
+        # accidental fake run reads as a success that moved no liquid. This
+        # cost a debugging session on 2026-08-13; it does not get to happen
+        # again quietly. Now that there is no dry run, there is no reason at
+        # all to be here on the fake backend, so this refuses unconditionally
+        # rather than only when arming.
+        print("\n  The vendor DLL did not load, so this run would energise\n"
+              "  nothing while looking exactly like one that did.\n"
               "  Almost always: you are on WSL/Linux, where the Windows x64 DLL\n"
               "  cannot load. Use the Windows interpreter:\n"
-              "    .\\.venv\\Scripts\\python.exe microdrop\\run_8piece_split.py --arm\n")
+              "    .\\.venv\\Scripts\\python.exe microdrop\\run_8piece_split.py\n")
         return 4
 
     chip = ChipController(backend, cfg.rows, cfg.cols, cfg.volts,
-                          armed=args.arm,
-                          step_delay_s=STEP_DELAY_S if args.arm else 0.0,
+                          armed=True,
+                          step_delay_s=STEP_DELAY_S,
                           volt_tolerance=cfg.volt_tolerance,
                           volt_settle_s=cfg.volt_settle_s,
                           power_settle_s=cfg.power_settle_s)
@@ -248,10 +268,6 @@ def main() -> int:
         announce=lambda m: say("Split", m),
     )
     approach = check_geometry(session)
-    if not args.arm:
-        session.notes.append(
-            "DRY RUN: nothing was energised, so no liquid moved. The gate "
-            "sequence and the geometry were exercised; nothing else was.")
 
     total = 1 + approach.n_frames + session.plan.n_frames
     say("Plan", f"{total} frames, ~{approach.duration_s() + session.plan.duration_s():.0f}s "
@@ -262,7 +278,7 @@ def main() -> int:
         check = chip.verify_voltage()
         for line in check.summary().splitlines():
             say("Volts", line)
-        if args.arm and not check.ok:
+        if not check.ok:
             print("\n  Rails do not match what was commanded. Refusing to split.\n")
             return 3
         if not confirm("Is the voltage connection verified and good?"):
