@@ -212,44 +212,78 @@ class SplitParams:
     # Defaulted off so it is a decision, not an inheritance.
     neck_retract: bool = False
 
-    #: Stretch ratio for the LAST stage of a tree only. None (the default)
-    #: means every stage uses `stretch_ratio`, which is the proven 1.75 and is
-    #: exactly the behaviour this class had before this field existed.
+    #: Per-stage stretch ratio overrides, as (stage_index, ratio) pairs. Empty
+    #: (the default) means every stage uses `stretch_ratio`, which is the
+    #: proven 1.75 and is exactly the behaviour this class had before this
+    #: field existed. A tuple of pairs rather than a dict so the dataclass
+    #: stays frozen and hashable.
     #:
     #: WHY THIS EXISTS. Separation is not a free parameter -- see `neck_gap`,
     #: which is `stretch_to(e) - e` and therefore fully determined by the ratio
     #: and the parent extent. There is no margin to widen. The only way to put
-    #: the two children further apart is to stretch the parent further before
-    #: eroding, and this field is that lever, restricted to the last stage so
-    #: that earlier stages proven on hardware keep their proven numbers.
+    #: the two children of a split further apart is to stretch their parent
+    #: further before eroding, and this field is that lever, per stage, so that
+    #: stages which work on hardware keep their proven numbers.
+    #:
+    #: PER STAGE, NOT PER PIECE. Every parent within a stage gets the same
+    #: ratio, and that is a constraint rather than an omission. Each split is
+    #: required to be mirror-symmetric about its own parent's centre line
+    #: (`splitplan._stretch_origin` refuses an odd surplus outright, and
+    #: `test_splitplan.TestSymmetry` checks every frame), so the two children
+    #: of one split cannot be pushed out by different amounts. Doing that would
+    #: also give the two neck stubs different lengths, draining the neck
+    #: unevenly into the two children -- the exact csvvolcont bias that
+    #: centre-out erosion exists to remove -- and `volume_equality` would NOT
+    #: catch it, because it counts activated electrodes and both children would
+    #: still be the same size.
     #:
     #: THE COST, STATED PLAINLY. `stretch_ratio` 1.75 is the one number here
     #: inherited whole from a script that works (csvvolcont L230-235). Any
-    #: value in this field is off that evidence: it asks a fixed volume of
-    #: liquid to follow a longer pad, which thins the film further than
-    #: anything proven. That is the intended mechanism -- a thinner neck breaks
-    #: more readily -- but past some ratio the contact line depins, or the
-    #: middle dewets and leaves a satellite instead of a clean break. Nothing
-    #: here knows where that limit is. It is a hardware question.
-    final_stretch_ratio: float | None = None
+    #: override is off that evidence: it asks a fixed volume of liquid to
+    #: follow a longer pad, which thins the film further than anything proven.
+    #: That is the intended mechanism -- a thinner neck breaks more readily --
+    #: but past some ratio the contact line depins, or the middle dewets and
+    #: leaves a satellite instead of a clean break. Nothing here knows where
+    #: that limit is. It is a hardware question.
+    #:
+    #: WATCH THE ASPECT RATIO, NOT THE CHIP MARGIN. What bounds a widening is
+    #: not running out of array -- see `splitplan`'s axis-ordering table, where
+    #: 3.6 at full stretch is joint-best and 7.2 is "where liquid breaks up and
+    #: throws satellites unbidden". Widening an H stage on an already-narrow
+    #: parent is far more expensive in aspect than widening a W stage on a
+    #: square one, so the cheap and expensive overrides do not look alike.
+    stage_stretch_ratios: tuple[tuple[int, float], ...] = ()
 
     def for_stage(self, stage: int, n_stages: int) -> "SplitParams":
         """The parameters that apply at `stage` of an `n_stages` tree.
 
-        Identity for every stage unless `final_stretch_ratio` is set, in which
-        case the last stage -- and only the last stage -- gets it. Returning a
-        substituted copy rather than branching inside `split_frames` keeps the
-        stage rule in one place, and keeps `split_frames` a function of the
-        parameters it is handed.
+        Identity for every stage with no override. Returning a substituted copy
+        rather than branching inside `split_frames` keeps the stage rule in one
+        place, and keeps `split_frames` a function of the parameters it is
+        handed.
 
-        The copy clears `final_stretch_ratio`, so the result is a plain
-        single-ratio parameter set. Applying `for_stage` to it again is a
-        no-op rather than a second substitution.
+        The copy clears the overrides, so the result is a plain single-ratio
+        parameter set. Applying `for_stage` to it again is a no-op rather than
+        a second substitution.
+
+        Out-of-range stage indices RAISE rather than being ignored. Silently
+        doing nothing is the wrong failure for this: an override aimed at a
+        stage that does not exist means the caller believes it widened a split
+        it did not, which is precisely the belief that gets a geometry run on a
+        chip under the wrong name.
         """
-        if self.final_stretch_ratio is None or stage != n_stages - 1:
-            return self
-        return replace(self, stretch_ratio=self.final_stretch_ratio,
-                       final_stretch_ratio=None)
+        overrides = dict(self.stage_stretch_ratios)
+        out_of_range = sorted(s for s in overrides if not 0 <= s < n_stages)
+        if out_of_range:
+            raise ValueError(
+                f"stage_stretch_ratios targets stage(s) {out_of_range}, but "
+                f"this tree has {n_stages} stage(s), numbered 0 to "
+                f"{n_stages - 1}"
+            )
+        ratio = overrides.get(stage)
+        if ratio is None:
+            return replace(self, stage_stretch_ratios=())
+        return replace(self, stretch_ratio=ratio, stage_stretch_ratios=())
 
     def stretch_to(self, parent_extent: int) -> int:
         """Full-stretch extent. Always even -- see `_round_even`."""

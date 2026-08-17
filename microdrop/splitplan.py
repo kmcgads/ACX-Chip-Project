@@ -581,9 +581,11 @@ def plan_tree(root: DropNode, axes: Sequence[Axis] = DEFAULT_AXES,
                 ))
 
     for stage, axis in enumerate(axes):
-        # Identity unless `sp.final_stretch_ratio` is set, in which case the
-        # last stage gets a different ratio and every earlier stage keeps the
-        # proven one. See SplitParams.for_stage.
+        # Identity unless `sp.stage_stretch_ratios` names this stage, in which
+        # case it gets a different ratio and every other stage keeps the proven
+        # one. Resolved once per stage, OUTSIDE the parent loop below, which is
+        # what makes the widening per-stage rather than per-piece -- see
+        # SplitParams.stage_stretch_ratios for why per-piece is refused.
         sp_stage = sp.for_stage(stage, len(axes))
         parents = sorted((plan.nodes[i] for i in live),
                          key=lambda n: (n.row, n.col))

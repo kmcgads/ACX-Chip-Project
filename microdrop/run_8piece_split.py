@@ -143,10 +143,11 @@ SPLIT_ROW, SPLIT_COL = 55, 55   # where the tree runs
 DROPLET_H, DROPLET_W = 20, 20   # the starting droplet
 AXES = ("W", "H", "W")          # 3 stages -> 8 pieces
 
-# Applies to the LAST stage only; stages 0 and 1 keep the proven 1.75. This is
-# the single number that changed on 2026-08-17 and the only reason this file no
-# longer says "verified". See SplitParams.final_stretch_ratio.
+# Applies to stage 2 -- the last -- only; stages 0 and 1 keep the proven 1.75.
+# This is the single number that changed on 2026-08-17 and the only reason this
+# file no longer says "verified". See SplitParams.stage_stretch_ratios.
 FINAL_STRETCH_RATIO = 2.2
+STAGE_STRETCH_RATIOS = ((2, FINAL_STRETCH_RATIO),)
 
 # What the above must produce. A mismatch means the planner changed under this
 # script, and it stops rather than running a geometry nobody has looked at.
@@ -269,8 +270,8 @@ def check_geometry(session: SplitSession) -> SP.Approach:
             + "".join(f"    - {p}\n" for p in problems)
             + "\n  microdrop/splitplan.py or params.py has changed since\n"
               "  2026-08-17. Either restore it, or re-check with\n"
-              "  `python -m microdrop.protocol --plan-only --final-stretch "
-              f"{FINAL_STRETCH_RATIO}`\n"
+              "  `python -m microdrop.protocol --plan-only "
+              f"--stretch-stage 2:{FINAL_STRETCH_RATIO}`\n"
               "  and update the EXPECT_* constants at the top of this file to\n"
               "  match what you checked.\n")
 
@@ -345,7 +346,7 @@ def main() -> int:
                          row=SPLIT_ROW, col=SPLIT_COL),
         axes=AXES,
         cfg=cfg,
-        sp=P.SplitParams(final_stretch_ratio=FINAL_STRETCH_RATIO),
+        sp=P.SplitParams(stage_stretch_ratios=STAGE_STRETCH_RATIOS),
         transport=True,
         approach_from=SP.DropNode(id="d", parent=None, stage=0,
                                   height=DROPLET_H, width=DROPLET_W,

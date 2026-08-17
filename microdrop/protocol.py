@@ -305,6 +305,17 @@ def _position(text: str) -> tuple[int, int]:
     return r, c
 
 
+def _stage_ratio(text: str) -> tuple[int, float]:
+    """`N:RATIO` for --stretch-stage. Stage index is 0-based, as in the plan."""
+    try:
+        stage, ratio = text.split(":")
+        return int(stage), float(ratio)
+    except Exception:
+        raise argparse.ArgumentTypeError(
+            f"expected STAGE:RATIO with a 0-based stage (e.g. 2:2.2), "
+            f"got {text!r}")
+
+
 def _axes(text: str) -> tuple[SP.Axis, ...]:
     out = tuple(ch.upper() for ch in text if not ch.isspace())
     bad = [a for a in out if a not in ("W", "H")]
@@ -352,14 +363,18 @@ def build_parser() -> "argparse.ArgumentParser":
                    help="Split axis order, W/H per stage. Default WHW = 8 "
                         "pieces of 10x5. WHWH = 16 of 5x5, which the default "
                         "position has room for. (default: %(default)s)")
-    p.add_argument("--final-stretch", type=float, default=None, metavar="RATIO",
-                   help="Stretch ratio for the LAST stage only; every earlier "
-                        f"stage keeps the proven {P.STRETCH_RATIO}. Raising it "
-                        "is the ONLY way to put the two children of a split "
+    p.add_argument("--stretch-stage", action="append", default=None,
+                   metavar="N:RATIO", dest="stretch_stage",
+                   help="Stretch ratio for stage N only; every other stage "
+                        f"keeps the proven {P.STRETCH_RATIO}. Repeatable, e.g. "
+                        "--stretch-stage 2:2.2 --stretch-stage 3:2.2. Raising "
+                        "it is the ONLY way to put the two children of a split "
                         "further apart -- the neck gap is stretch_to(e) - e, "
                         "so there is no separation margin to widen directly. "
-                        "Off the proven evidence: see "
-                        "SplitParams.final_stretch_ratio. Recorded in the run "
+                        "Applies to every parent in the stage; per-piece "
+                        "widening is refused by the symmetry invariant. Off "
+                        "the proven evidence: see "
+                        "SplitParams.stage_stretch_ratios. Recorded in the run "
                         "notes.")
     p.add_argument("--backend", choices=("auto", "real", "fake"), default="auto",
                    help="'auto' uses the vendor DLL where it can load and a "
@@ -452,7 +467,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     cfg = ChipConfig()
-    sp = P.SplitParams(final_stretch_ratio=args.final_stretch)
+    stage_ratios = tuple(_stage_ratio(s) for s in (args.stretch_stage or ()))
+    sp = P.SplitParams(stage_stretch_ratios=stage_ratios)
     row, col = args.at or (SP.SPLIT_ROOT_ROW, SP.SPLIT_ROOT_COL)
     root = SP.DropNode(id="d", parent=None, stage=0, height=20, width=20,
                        row=row, col=col)
@@ -566,14 +582,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         chip=chip, root=root, axes=args.axes, cfg=cfg, sp=sp,
         transport=walk, approach_from=approach_from, confirm=confirm,
         allow_violations=args.allow_clearance_violations)
-    if args.final_stretch is not None:
-        # Same reasoning as the step-delay note below: a run whose last stage
-        # was stretched off the proven ratio must not later be read as one that
+    if stage_ratios:
+        # Same reasoning as the step-delay note below: a run whose stages were
+        # stretched off the proven ratio must not later be read as one that
         # used the proven geometry.
+        detail = ", ".join(f"stage {s} at {r}" for s, r in sorted(stage_ratios))
         session.notes.append(
-            f"--final-stretch {args.final_stretch}: the LAST stage stretched "
-            f"at {args.final_stretch} instead of the proven "
-            f"{P.STRETCH_RATIO}. Earlier stages are unaffected. This is off "
+            f"--stretch-stage: {detail}, instead of the proven "
+            f"{P.STRETCH_RATIO}. Every other stage is unaffected. This is off "
             f"the csvvolcont evidence and is not a proven geometry.")
     if args.yes:
         session.notes.append(

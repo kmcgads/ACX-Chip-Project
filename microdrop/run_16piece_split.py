@@ -13,52 +13,77 @@ until a live run is done and confirmed holding. At that point, and not
 before: change this header, tag the commit `split-16piece-verified`, and say
 what chip it ran on.
 
-⚠ STAGE 2 OF THIS TREE IS A SPLIT THAT HAS ALREADY FAILED ON HARDWARE
-─────────────────────────────────────────────────────────────────────
-Corrected 2026-08-17. This section used to say the first three stages were
-"the verified 8-piece run ... frame for frame". Both halves of that are now
-wrong.
+BOTH FAILING STAGES ARE WIDENED — 2026-08-17
+────────────────────────────────────────────
+A live run of this tree did not fully separate at stage 2 (4->8) or stage 3
+(8->16). Both are now stretched at 2.2 instead of the proven 1.75, opening
+each one's neck gap from 8 to 12 electrodes. Stages 0 and 1 keep the proven
+ratio, frame for frame, because they worked: 20 -> 36, gap 16, 17 frames.
 
-FIRST, THE 8-PIECE RUN IS NO LONGER LABELLED VERIFIED. A live run of it did
-not fully separate at its last stage -- the 10-wide W split that produces
-10x5 pieces. That is stage 2 of THIS tree, identical in axis and extents
-(10 -> two 5s, stretch 10 -> 18, gap 8, 9 frames). So this script does not
-merely inherit a proven prefix; it inherits, unchanged, the exact operation
-that failed. Expect it to fail here too, at stage 2, before stage 3 is ever
-reached.
+Stage 2 failing is consistent rather than surprising: it is the same 10-wide
+W split that failed in the 8-piece run, identical in axis and extents. That
+makes it a REPRODUCIBLE failure, which is the useful kind.
 
-SECOND, THE PREFIX IS NO LONGER IDENTICAL ANYWAY. `run_8piece_split.py` has
-since widened its final stage to `final_stretch_ratio=2.2`, opening that
-split's neck gap from 8 to 12. This file passes no override, so its stage 2
-still runs at the proven 1.75 and a gap of 8. The two scripts now diverge at
-exactly the stage in question, and that divergence is deliberate and
-unresolved -- see the note at the bottom of this docstring.
+⚠ WHAT THIS FIX IS NOT. The 8-piece run failed with geometry identical to a
+run that had worked, so geometry was never shown to be the differing
+variable. Widening buys margin against a cause still unidentified: droplet
+volume at load, filler oil, chip surface state, rail voltage under load,
+dwell at the smallest pieces, plate gap. Note also that as of this writing
+the widened 8-piece had not yet been re-run, so whether a gap of 12 helps AT
+ALL is untested. If these stages still fail at 12, the answer is in that list
+and not in a larger number here.
 
-Stages 0 and 1 are still shared with the 8-piece run and still unmodified:
-20 -> 36 at the proven ratio, gap 16, 17 frames each.
+WHY PER STAGE AND NOT PER PIECE
+───────────────────────────────
+The obvious idea -- push the outward-facing child of each split further out
+and leave the inward-facing one alone, using the free chip outside the tree
+rather than the crowded space inside it -- is aimed at exactly the right
+thing, and is refused anyway. Each split must be mirror-symmetric about its
+own parent's centre line: `splitplan._stretch_origin` raises on an odd
+surplus, and `TestSymmetry` checks every frame. Worse, unequal placement
+gives the two neck stubs unequal lengths, so the neck drains unevenly into
+the two children -- the csvvolcont bias centre-out erosion exists to remove --
+and `volume_equality` would NOT catch it, because both children would still
+activate the same number of electrodes.
 
-WHAT STAGE 3 WOULD ANSWER, IF IT IS EVER REACHED
-────────────────────────────────────────────────
+Nor is there an outer-vs-inner distinction among parents to exploit: at every
+stage all parents sit at the same distance from the tree centre along the
+axis being split (stage 2 at cols 47/47/73/73, stage 3 at rows 47/73).
+
+WHAT IT COSTS: CROWDING, AND ASPECT RATIO
+─────────────────────────────────────────
+Widening pushes each child outwards, towards the NEIGHBOURING group's child,
+so sibling and non-sibling separation move in OPPOSITE directions:
+
+  stage ratios (0,1,2,3)    sibling sep   nearest non-sib   frames   aspect
+  1.75 1.75 1.75 1.75                8                 8      159      3.6
+  1.75 1.75 2.2  2.2                12                 4      207      4.4
+  1.75 1.75 2.4  2.4                14                 2      231      4.8
+  2.2  2.2  2.2  2.2                12                12      231      4.4
+
+This file uses the second row. The fourth row removes the crowding entirely
+by spreading the four groups apart first, and was rejected for now because it
+changes stages 0 and 1, which have never failed.
+
+ASPECT IS THE REAL CEILING, not chip margin -- the tree has 42 free
+electrodes on every side. `splitplan`'s axis-ordering table records 3.6 at
+full stretch as joint-best and 7.2 as "where liquid breaks up and throws
+satellites unbidden". This widening takes the worst stage from 3.6 to 4.4.
+The H stages are the expensive ones: stage 3 stretches the long axis of an
+already-narrow 10x5, so it was ALREADY the worst in the tree at 3.6, and
+widening it is the most aspect-expensive change available here. Stage 2, on a
+square 10x10, is nearly free (1.8 -> 2.2). If the widened stage 3 throws
+satellites where the unwidened one merely failed to part, that is the
+trade-off landing badly and stage 3 should go back to 1.75.
+
+WHAT STAGE 3 ANSWERS
+────────────────────
 Stage 3 takes eight 10x5 pieces to sixteen 5x5 ones -- 1.232 x 1.232 mm, and
 that is the FLOOR for a 20x20 droplet. 20 = 2^2 x 5, so four halvings is all
 divisibility allows; a fifth would have to halve a 5, and the planner refuses
 rather than guess which child gets the extra electrode. So this run answers
 the last question this droplet can ask. If 5x5 does not hold, no 32-piece
 tree from a 20x20 can either, whatever else changes.
-
-But that question is downstream of the one stage 2 just answered badly.
-Running this before the 10 -> 5 split is reliable spends a chip loading on a
-tree that should stop at its third gate.
-
-THE UNRESOLVED DECISION
-───────────────────────
-This file has NOT been given the 8-piece script's widening, and that is a
-pending choice rather than a considered one. Applying `final_stretch_ratio`
-here would widen stage 3 only -- the LAST stage -- which is not the stage
-that failed. Fixing stage 2 in this tree needs a per-stage override that
-targets stage 2, which `SplitParams.for_stage` does not currently express:
-it knows only "the last stage". Whichever way that goes, it should follow the
-8-piece result, not precede it.
 
 Every parameter below is HARDCODED, for the same reason as in the 8-piece
 script: the moment this file can be pointed at a different geometry it stops
@@ -141,10 +166,7 @@ from microdrop.protocol import OperatorAbort, SplitSession
 
 # ── The candidate configuration ───────────────────────────────────────────────
 # The load position, the walk and the split position are the same ones the
-# 8-piece script uses -- unchanged on purpose. Note that this no longer makes
-# the fourth split the only variable: since 2026-08-17 the 8-piece script also
-# widens its final stage, and this file does not, so stage 2 differs between
-# them as well. See the docstring. Written out rather than read from
+# 8-piece script uses -- unchanged on purpose. Written out rather than read from
 # splitplan's defaults for the same reason as in the 8-piece script: if a later
 # change moves `split_root` or `DEFAULT_AXES`, this file must keep doing what it
 # says, or refuse. See check_geometry().
@@ -154,16 +176,26 @@ SPLIT_ROW, SPLIT_COL = 55, 55   # where the tree runs
 DROPLET_H, DROPLET_W = 20, 20   # the starting droplet
 AXES = ("W", "H", "W", "H")     # 4 stages -> 16 pieces
 
+# THE TWO STAGES THAT FAILED LIVE, widened 2026-08-17. Stage 2 is 4->8 and
+# stage 3 is 8->16; stages 0 and 1 keep the proven 1.75 because they worked.
+# Both go to 2.2, opening each one's neck gap from 8 to 12. See the header for
+# what this costs and `SplitParams.stage_stretch_ratios` for why it is per
+# stage rather than per piece.
+WIDENED_RATIO = 2.2
+STAGE_STRETCH_RATIOS = ((2, WIDENED_RATIO), (3, WIDENED_RATIO))
+
 # What the above must produce. Taken from `python -m microdrop.protocol
-# --plan-only --axes WHWH` on 2026-08-17, against splitplan at ebcb64e. These
-# are DRY-RUN expectations: they pin the planner, they do not certify the
-# physics. A mismatch means the planner changed under this script, and it stops
-# rather than running a geometry nobody has looked at.
+# --plan-only --axes WHWH --stretch-stage 2:2.2 --stretch-stage 3:2.2` on
+# 2026-08-17. These are DRY-RUN expectations: they pin the planner, they do not
+# certify the physics. A mismatch means the planner changed under this script,
+# and it stops rather than running a geometry nobody has looked at.
 EXPECT_PIECES = 16
 EXPECT_LEAF = (5, 5)            # electrodes; 1.232 x 1.232 mm at the 246.48um pitch
 EXPECT_WALK_ELECTRODES = 50
 EXPECT_APPROACH_FRAMES = 100
-EXPECT_TREE_FRAMES = 159        # 1 hold + 100 approach + 159 = 260 frames, ~130s
+EXPECT_TREE_FRAMES = 207        # was 159 unwidened; 1 + 100 + 207 = 308, ~154s
+EXPECT_WIDENED_GAP = 12         # stages 2 and 3. Was 8. THE CHANGE
+EXPECT_EARLY_GAP = 16           # stages 0-1, unchanged and must stay unchanged
 
 STEP_DELAY_S = P.PROVEN_SETTLE_S    # 0.5s, csvvolcont.py:137
 BAR = "=" * 68
@@ -173,10 +205,16 @@ RULE = "─" * 60
 #: terminal. A transcript of confident yeses must not read six months from now
 #: as though this geometry had been proven.
 UNVERIFIED_NOTE = (
-    "NOT HARDWARE-VERIFIED: this 16-piece geometry had never been run on a "
-    "chip as of 2026-08-17. The operator answers below are the first evidence "
-    "of anything. Do not cite this configuration as proven on the strength of "
-    "one transcript.")
+    "NOT HARDWARE-VERIFIED: stages 2 and 3 stretch at 2.2 instead of the "
+    "proven 1.75, opening both neck gaps from 8 to 12. That widening had never "
+    "been on a chip as of 2026-08-17, and it was reached by adding margin, not "
+    "by identifying why the unwidened stages failed to separate -- the earlier "
+    "8-piece failure happened with geometry identical to a run that worked, so "
+    "geometry was never shown to be the differing variable. Worst stretch "
+    "aspect rises 3.6 -> 4.4 against the 7.2 that splitplan records as where "
+    "liquid throws satellites, so watch stage 3 for satellites specifically. "
+    "Do not cite this configuration as proven on the strength of one "
+    "transcript.")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -256,6 +294,19 @@ def check_geometry(session: SplitSession) -> SP.Approach:
         problems.append(f"leaf sizes {sorted(leaves)}, expected {EXPECT_LEAF}")
     if plan.n_frames != EXPECT_TREE_FRAMES:
         problems.append(f"{plan.n_frames} tree frames, expected {EXPECT_TREE_FRAMES}")
+
+    # The two halves of the 2026-08-17 widening, pinned separately so neither
+    # can drift into the other. Stages 2-3 are what was widened; stages 0-1 are
+    # what must NOT have been, because they worked on hardware.
+    widened = {s.neck_gap for s in plan.steps if s.stage in (2, 3)}
+    early = {s.neck_gap for s in plan.steps if s.stage in (0, 1)}
+    if widened != {EXPECT_WIDENED_GAP}:
+        problems.append(f"stage 2-3 neck gap {sorted(widened)}, expected "
+                        f"{EXPECT_WIDENED_GAP}")
+    if early != {EXPECT_EARLY_GAP}:
+        problems.append(f"stage 0-1 neck gap {sorted(early)}, expected "
+                        f"{EXPECT_EARLY_GAP} -- the widening must apply to "
+                        f"stages 2 and 3 only; 0 and 1 have worked on hardware")
     if approach.electrodes != EXPECT_WALK_ELECTRODES:
         problems.append(f"walk is {approach.electrodes} electrodes, "
                         f"expected {EXPECT_WALK_ELECTRODES}")
@@ -271,9 +322,12 @@ def check_geometry(session: SplitSession) -> SP.Approach:
             "  dry-run checked.\n"
             + "".join(f"    - {p}\n" for p in problems)
             + "\n  microdrop/splitplan.py has changed since 2026-08-17. Either\n"
-              "  restore it, or re-check with `python -m microdrop.protocol\n"
-              "  --plan-only --axes WHWH` and update the EXPECT_* constants at\n"
-              "  the top of this file to match what you checked.\n")
+              "  restore it, or re-check with\n"
+              "  `python -m microdrop.protocol --plan-only --axes WHWH "
+              f"--stretch-stage 2:{WIDENED_RATIO} --stretch-stage "
+              f"3:{WIDENED_RATIO}`\n"
+              "  and update the EXPECT_* constants at the top of this file to\n"
+              "  match what you checked.\n")
 
     return approach
 
@@ -302,10 +356,12 @@ def main() -> int:
           f" to row {SPLIT_ROW}, col {SPLIT_COL}")
     print(f"  split    {' -> '.join(AXES)}  ->  {EXPECT_PIECES} pieces of "
           f"{EXPECT_LEAF[0]}x{EXPECT_LEAF[1]}")
-    print(f"  status   stages 0-1 shared with the 8-piece run and unchanged")
-    print(f"  WARNING  stage 2 (10 -> two 5s, gap 8) is the split that FAILED")
-    print(f"           live in the 8-piece run. Unwidened here. Expect trouble")
-    print(f"           at gate 5 of 6 (the count of 8), before stage 3")
+    print(f"  change   stages 2 AND 3 stretch at {WIDENED_RATIO} "
+          f"(not {P.STRETCH_RATIO}); neck gap 8 -> {EXPECT_WIDENED_GAP} on both")
+    print(f"  status   stages 0-1 unchanged at the proven ratio, gap "
+          f"{EXPECT_EARLY_GAP}")
+    print(f"  WATCH    gates 5 and 6 -- both stages failed to separate live,")
+    print(f"           and both are widened here for the first time")
     print(f"  mode     ARMED — the rails come up on connect and electrodes "
           f"will be energised")
 
@@ -349,6 +405,7 @@ def main() -> int:
                          row=SPLIT_ROW, col=SPLIT_COL),
         axes=AXES,
         cfg=cfg,
+        sp=P.SplitParams(stage_stretch_ratios=STAGE_STRETCH_RATIOS),
         transport=True,
         approach_from=SP.DropNode(id="d", parent=None, stage=0,
                                   height=DROPLET_H, width=DROPLET_W,
