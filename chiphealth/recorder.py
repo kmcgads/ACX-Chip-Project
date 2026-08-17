@@ -2,15 +2,15 @@
 
 Standard library only. Image and video encoding are **injected** as callables,
 so the schema and cadence logic are testable on a machine with no OpenCV
-(spec/p1_build_status.md).
+(docs/spec/p1_build_status.md).
 
 The artifact is not a log. Its stated purpose is longitudinal: tracking device
 performance over time, and accumulating a labelled dataset to eventually train a
-model to recognise sticky-spot behaviour (spec/objectives.md §1.8). That makes
+model to recognise sticky-spot behaviour (docs/spec/objectives.md §1.8). That makes
 schema stability a design constraint, not housekeeping -- runs compared months
 apart must have the same field names and recorded parameters.
 
-Layout (spec/p1_chip_health_design.md §6.1):
+Layout (docs/spec/p1_chip_health_design.md §6.1):
 
     runs/<run_id>/
       run.json           params, chip_id, environment, versions, prompts
@@ -93,7 +93,7 @@ def code_version() -> dict:
 
 # Verdicts, worst-wins. "unknown" is a first-class outcome, not a synonym for
 # "fine" -- a region never covered by liquid was never tested, and reporting it
-# as healthy would be a lie (spec/objectives.md §1.3).
+# as healthy would be a lie (docs/spec/objectives.md §1.3).
 UNKNOWN = "unknown"
 PASS = "pass"
 DEGRADED = "degraded"
@@ -342,7 +342,7 @@ class RunRecorder:
         """Record a trouble event: structured row plus its images.
 
         Every trouble event produces a saved image and a data entry -- a core
-        requirement, not an afterthought (spec/objectives.md §1.8).
+        requirement, not an afterthought (docs/spec/objectives.md §1.8).
         """
         self._event_seq += 1
         event_id = f"{self.run_id}_e{self._event_seq:04d}"
@@ -404,7 +404,7 @@ class RunRecorder:
         """Save a clean example, at random, as a matched negative.
 
         A dataset of only trouble events cannot train a classifier -- there is
-        nothing to contrast against (spec/objectives.md §1.8). Sampling is
+        nothing to contrast against (docs/spec/objectives.md §1.8). Sampling is
         seeded so a run is reproducible.
         """
         if frame is None or self.rng.random() >= self.cfg.capture.negative_sample_rate:
@@ -438,7 +438,7 @@ class RunRecorder:
         """Structured, logged prompts -- not a bare input() with a discarded return.
 
         Prompts are legitimate only where a physical human action is genuinely
-        required: loading oil or sample, adjusting focus (spec/objectives.md §0.1).
+        required: loading oil or sample, adjusting focus (docs/spec/objectives.md §0.1).
         """
         self.prompts.append({"t": t, "asked": asked, "response": response})
 

@@ -5,7 +5,7 @@ import unittest
 from chiphealth import sweep
 from chiphealth.sweep import AXIS_COL, AXIS_ROW
 
-# The real geometry, from spec/p1_chip_health_design.md.
+# The real geometry, from docs/spec/p1_chip_health_design.md.
 ROWS = COLS = 128
 WIN = 20
 START_ROW, START_COL = 5, 10   # moved off the edge electrodes 2026-08-12

@@ -2,7 +2,7 @@
 
 867 real steps through sweep -> synthetic rig -> detector -> recorder, with no
 camera, no OpenCV and no chip. Injected dead electrodes are the only ground
-truth available until the real chip provides some (spec/objectives.md §1.4 q11).
+truth available until the real chip provides some (docs/spec/objectives.md §1.4 q11).
 
 Read the passes here for what they are: evidence the pipeline wires together and
 the detector finds faults it is *given*. They say nothing about whether the

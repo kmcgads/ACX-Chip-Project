@@ -9,7 +9,7 @@ import numpy as np
 class CameraInterface:
     """Connection to the researcher's own microscope camera.
 
-    Wide-field additions for the chip-health run (spec/p1_chip_health_design.md
+    Wide-field additions for the chip-health run (docs/spec/p1_chip_health_design.md
     §8) are layered on top without changing any existing behaviour --
     masterscript3.py, bayesxcam.py and bayesopttest1.py all import this class.
 
@@ -21,7 +21,7 @@ class CameraInterface:
       loop does not pay a device-open per frame. Use as a context manager.
 
     Deliberately *not* the vendor camera: no MvCameraControl.dll, no Hikrobot
-    MVS, no ONNX detectors (spec/objectives.md §0.2).
+    MVS, no ONNX detectors (docs/spec/objectives.md §0.2).
     """
 
     def __init__(self, camera_address: Union[int, str] = 0) -> None:
@@ -44,7 +44,7 @@ class CameraInterface:
         ``autofocus`` defaults to True and ``resolution`` to None so existing
         callers behave exactly as before. Measurement runs pass False for
         autofocus: refocusing mid-run is a real variance source
-        (spec/objectives.md §1.4).
+        (docs/spec/objectives.md §1.4).
 
         ``resolution`` requests a capture size. Left unset, the driver default
         applies -- which for this c922 is 640x480, and at that size the chip
@@ -77,7 +77,7 @@ class CameraInterface:
 
         A visualization loop cannot pay a device-open per frame, which is what
         ``take_picture`` does. Approved as a lifetime change only -- same
-        camera, same CAP_DSHOW/MJPG connection (spec/objectives.md §0.2).
+        camera, same CAP_DSHOW/MJPG connection (docs/spec/objectives.md §0.2).
         """
         if self._stream is None:
             self._stream = self._open_camera(autofocus=autofocus,
@@ -315,7 +315,7 @@ class CameraInterface:
         Corners in order: top-left, top-right, bottom-right, bottom-left of the
         electrode array. Cacheable and reusable for as long as the camera does
         not move. Electrode pitch is not needed -- corner registration gives the
-        whole mapping (spec/p1_chip_health_design.md §2, phase 2).
+        whole mapping (docs/spec/p1_chip_health_design.md §2, phase 2).
 
         The import is deliberately lazy so this module's top-level dependencies
         stay cv2 + numpy and the legacy scripts keep importing cleanly.
@@ -347,7 +347,7 @@ class CameraInterface:
         speck, which is the smallest thing worth finding.
 
         Thresholds are parameters, not constants, because the test substance
-        will change from dyed water to other chemicals (spec/objectives.md §1.4).
+        will change from dyed water to other chemicals (docs/spec/objectives.md §1.4).
         """
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         s_ch = hsv[:, :, 1]

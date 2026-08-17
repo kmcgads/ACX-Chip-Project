@@ -5,7 +5,7 @@
     python rescore.py runs/20260807T143537Z --label <event_id> human_confirmed
 
 Why this exists. The detector's thresholds are estimates -- there is no
-ground-truth faulty region on this chip yet (spec/objectives.md §1.4), so the
+ground-truth faulty region on this chip yet (docs/spec/objectives.md §1.4), so the
 first runs are calibration rather than measurement. When the thresholds improve,
 this replays every past run against the new ones: no hardware, no oil, no lost
 history. That is what makes improving the detector cheap.
@@ -20,7 +20,7 @@ Labels. The live run only ever writes ``label_source: auto``. A model trained
 purely on heuristic labels can at best learn to imitate the heuristic -- so
 promoting a label to ``human_confirmed`` or ``human_corrected`` happens here,
 and is what makes the dataset worth more than the detector that generated it
-(spec/objectives.md §1.8).
+(docs/spec/objectives.md §1.8).
 """
 
 from __future__ import annotations

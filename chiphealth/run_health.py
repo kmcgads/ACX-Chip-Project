@@ -4,7 +4,7 @@
     4 coarse sweep   5 triage         6 fine pass      7 shutdown
 
 One process, three modules: capture, actuation, and a pure detector
-(spec/p1_chip_health_design.md §3). OpenCV is imported lazily and only for the
+(docs/spec/p1_chip_health_design.md §3). OpenCV is imported lazily and only for the
 live window and the real camera, so a synthetic run works on a machine with
 neither cv2 nor hardware.
 
@@ -317,7 +317,7 @@ class Prompter:
     Legitimate only where a physical human action is genuinely required --
     loading oil or sample, adjusting focus. Not after routine DLL calls, which
     is the defect in chipsetup.py:30-58. Every prompt is logged with what was
-    asked and what came back (spec/objectives.md §0.1).
+    asked and what came back (docs/spec/objectives.md §0.1).
     """
 
     recorder: RunRecorder
@@ -1025,7 +1025,7 @@ class HealthRun:
 
         All loading is manual and more can be added mid-run, so the run asks
         rather than assuming everything was present at the start
-        (spec/objectives.md §1.4 q1).
+        (docs/spec/objectives.md §1.4 q1).
 
         Distinct from a fault: a shrinking or vanished droplet means there is
         nothing left to test with, not that the electrodes underneath are bad.

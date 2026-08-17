@@ -3,8 +3,8 @@
 **Design document. No code written.** Approved to design 2026-08-06; implementation gated on a
 further explicit go-ahead.
 
-Governed by `spec/objectives.md` §0 (standing requirements), §1 (Priority 1), and the vendor-DLL
-findings in `workspace/analysis.md`. Architecture context in `spec/design.md`.
+Governed by `docs/spec/objectives.md` §0 (standing requirements), §1 (Priority 1), and the vendor-DLL
+findings in `workspace/analysis.md`. Architecture context in `docs/spec/design.md`.
 
 **Design rule for this document, per researcher instruction:** adapt and extend the working
 scripts already in `project/`. Nothing here is designed from scratch where existing code covers

@@ -37,7 +37,7 @@ def fit_homography(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
 
     Standard DLT. Four correspondences give an exact solution; more are handled
     by least squares. Written out rather than pulled from OpenCV so this module
-    stays importable on a machine with no cv2 (spec/design.md §7).
+    stays importable on a machine with no cv2 (docs/spec/design.md §7).
 
     Args:
         src: (N, 2) array of source points, N >= 4.
@@ -196,7 +196,7 @@ class ElectrodeFrame:
         (camera.py:59) for wide-field use. At whole-chip framing one electrode is
         of the order of 100-225 px^2, so the fixed 500 silently discards 1-2
         electrode residue -- exactly the evidence the health check exists to
-        find (spec/p1_chip_health_design.md §8).
+        find (docs/spec/p1_chip_health_design.md §8).
         """
         return float(min_electrodes) * self.electrode_area_px()
 
@@ -240,7 +240,7 @@ def check_registration(observed_centroid_rc: tuple[float, float],
     mapping can be checked for free before anything is energised. A silently
     wrong coordinate frame would poison every verdict in the run, and this is
     the cheapest guard against it
-    (spec/p1_chip_health_design.md §2, phase 2).
+    (docs/spec/p1_chip_health_design.md §2, phase 2).
     """
     exp_centre = (expected_row + expected_h / 2.0 - 0.5,
                   expected_col + expected_w / 2.0 - 0.5)

@@ -388,7 +388,7 @@ Picking one, per your instruction, and using it consistently:
 - **`docs/steps/NNN-<slug>.md`** — one file per completed step, written **as part of that step**,
   never retroactively. Fixed sections: *What was built* · *Why* · *Vendor DLL mapping* (function →
   vendor export, with the analysis.md § that established it) · *What was tested* · *Known gaps*.
-- `spec/design.md` (this file) and `spec/requirements.md` stay current as the design moves.
+- `docs/spec/design.md` (this file) and `docs/spec/requirements.md` stay current as the design moves.
 
 ADRs already identified: **0001** dev-without-hardware / fake backend · **0002** C++/Qt shim vs
 alternatives · **0003** ABI sanity check at load · **0004** WinPcap dependency for the axis ·

@@ -531,7 +531,7 @@ need retuning.
 
 - **Plate gap** ⏰ — unmeasured, so `droplet_volume_nl()` returns `None` and volumes are
   unreportable. Needed before Priority 2 can state results in nanolitres
-  (`spec/objectives.md` §2.4 q3).
+  (`docs/spec/objectives.md` §2.4 q3).
 - Electrical / percentage scoring — no known path with the current hardware (`objectives.md` §1.6).
 - The ML model itself, and automatic degradation learning.
 - Mocking cv2 in the two environment-dependent picker tests.

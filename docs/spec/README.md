@@ -1,4 +1,4 @@
-# `spec/` — what we're building
+# `docs/spec/` — what we're building
 
 The governance source of truth for this project: priorities, requirements,
 design, and interface contracts. Research OS reads these to keep the build

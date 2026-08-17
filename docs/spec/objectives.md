@@ -16,7 +16,7 @@ and is not done.
 > work moves the stage. The claimed dependency of droplet splitting on the axis was never
 > justified anywhere in this document; see §2.1.
 
-**Relationship to `spec/design.md`:** `design.md` describes *architecture* (layers, module
+**Relationship to `docs/spec/design.md`:** `design.md` describes *architecture* (layers, module
 structure, signatures). This document describes *priority, sequence, and scope*. Where the two
 disagree, this document wins and the design doc is amended before that piece is built.
 Deltas to `design.md` created by this document are listed in §5.
@@ -523,7 +523,7 @@ Nothing in P2 begins while P1 is open. Each gate is a separate ask.
 
 ---
 
-## 5. Deltas this document creates in `spec/design.md`
+## 5. Deltas this document creates in `docs/spec/design.md`
 
 Recorded 2026-08-06. **Applied to `design.md` 2026-08-12** — see the amendment note at the top of
 that file. Kept here as the record of what changed and why.
@@ -560,13 +560,13 @@ nothing since 2026-08-07.
 
 - **Priority 1 is built.** Nine modules under `chiphealth/` plus `rescore.py` for offline
   re-scoring. **285 tests, 283 passing** — the 2 failures are environment-dependent (they assert
-  OpenCV is absent while it is installed). Detail in `spec/p1_build_status.md`.
+  OpenCV is absent while it is installed). Detail in `docs/spec/p1_build_status.md`.
 - All §1.4 questions answered 2026-08-06.
 - The held-open camera change (§0.2) — implemented as part of the P1 build, as scheduled.
 - Autofocus off, recorded per run (§0.2).
 - Arming gate, dry-run default (`design.md` §9 q5).
 - Electrode pitch resolved at 246.48 µm (§2.1), discharging the reminder owed to droplet-size work.
-- `spec/design.md` amended with the §5 deltas.
+- `docs/spec/design.md` amended with the §5 deltas.
 
 ### Not done
 

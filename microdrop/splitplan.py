@@ -1,165 +1,64 @@
 """Split-tree planner: one droplet -> 2^n pieces through n symmetric splits.
 
 Produces the tree (id, parent, stage, geometry) and the ordered frames that
-realise it. Pure -- no DLL, no USB, no `ActivateElec`. An executor hands the
-frames to `chiphealth.actuation.ChipController.activate`; this module can be
-run and tested on a machine with no rig, which is the same rule
-`detector.py` and `sweep.py` follow.
+realise it. Pure -- no DLL, no USB, no `ActivateElec`, and it runs and tests on
+a machine with no rig. An executor hands the frames to
+`chiphealth.actuation.ChipController.activate`.
 
-Mechanics come from `csvvolcont.py` via `params.py`. Read that module's
-header first -- it records what csvvolcont proves and what it does not.
+Mechanics come from `csvvolcont.py` via `params.py`.
 
+FULL EXPLANATIONS LIVE IN THE GUIDES. This docstring keeps only what you must
+know before editing this file:
 
-THE AXIS PROBLEM
-================
-A 20x20 cannot reach 8 equal pieces through three splits on one axis:
-20 -> 10 -> 5 -> 2.5, and 5 will not halve. So both axes must be used, and
-every valid ordering ends at a 10x5 or 5x10 piece.
+  docs/guides/symmetric-split.md              the algorithm, the axis problem,
+                                              the aspect-ratio table
+  docs/guides/clearance-gate.md               what refuses an off-grid plan
+  docs/guides/volume-equality.md              what "equal pieces" claims
+  docs/guides/separation-and-dwell-tuning.md  the ratios actually in use
+  docs/guides/provenance.md                   PROVEN vs DERIVED
 
-    W,H,W   20x20 -> 20x10 -> 10x10 -> 10x5      (default)
-    H,W,H   20x20 -> 10x20 -> 10x10 -> 5x10
-    W,W,H   20x20 -> 20x10 -> 20x5  -> 10x5      (valid, but see below)
-    W,W,W   20x20 -> 20x10 -> 20x5  -> refused
+FIVE THINGS THAT LOOK LIKE MISTAKES AND ARE NOT
+===============================================
 
-SYMMETRY IS THE PRIORITY
-========================
-Researcher decision, 2026-08-13: where csvvolcont's mechanics conflict with a
-true 50/50 halving, symmetry wins. csvvolcont dispenses from a stationary
-reservoir; this halves. Two of its details were reversed here -- the stretch
-is centred on the parent rather than anchored at its origin, and the neck
-erodes centre-out rather than one-sided. `params` records both in full, with
-the reasoning and the one proven number that had to move (20 -> 35 became
-20 -> 36, because an odd surplus cannot be halved on an integer grid).
+1. THE STRETCH IS CENTRED, NOT ORIGIN-ANCHORED, and the erosion runs
+   CENTRE-OUT, NOT ONE-SIDED. Both reverse csvvolcont deliberately (researcher,
+   2026-08-13: where its mechanics conflict with a true 50/50 halving, symmetry
+   wins). Its one-sided erosion hands ~44% of the stretched footprint to one
+   child -- correct for a dispense, a systematic volume bias for a halving.
 
-The resulting claim is exact, not approximate: every split is an exact 50/50
-division of its parent's footprint, and every frame of every split is mirror-
-symmetric about its parent's centre line. `test_splitplan.TestSymmetry`
-verifies both at all three stages rather than only at the root.
+2. BOTH AXES ARE REQUIRED. A 20x20 cannot reach 8 equal pieces on one axis:
+   20 -> 10 -> 5 -> 2.5. Orderings that spend both same-axis splits first reach
+   a 35x5 sliver (aspect 7.2) where liquid breaks up and throws satellites;
+   W,H,W is one of four joint-best at 3.6. `test_axis_ordering_table` pins it.
 
-VOLUME EQUALITY
-===============
-Method changed 2026-08-13 (researcher). It was: measure `ChipConfig.gap_um`,
-image the split pieces, compare. That was blocked on a measurement nobody had
-taken, so volume equality sat permanently UNVERIFIED and the package could only
-claim footprint.
+3. EVERYTHING ROUNDS TO EVEN, not to nearest. A centred stretch and a
+   centre-out erosion both need a halvable surplus. This is the one place a
+   proven number moved: 20 -> 35 became 20 -> 36.
 
-It is now based on the PIXEL SIZE OF THE ACTIVATED ELECTRODE AREA -- the
-electrode count and geometry of each split piece, as a proxy for its volume.
-See `volume_equality` and `DropNode.activated_area_electrodes`.
+4. POSITIONS ARE 1-BASED, measured through `chiphealth.clearance` -- the same
+   function `ChipController._validate` uses. When these were two separate
+   0-based/1-based checks they disagreed by one electrode at every edge, and
+   `cleared_root()` planned with zero violations while the controller refused
+   63 of its 87 frames.
 
-This works because equality is a ratio, and the gap cancels out of a ratio:
-`V = A x g`, so `V_a/V_b = A_a/A_b` when the gap is the same under both. The
-unmeasured gap still blocks any ABSOLUTE figure -- there is no nanolitre number
-in this repo and there must not be -- but "these eight pieces hold the same
-amount" is decidable exactly, from geometry, today.
+5. `plan_tree` VALIDATES THE STRETCHED FOOTPRINT MID-SPLIT, not just the
+   settled pieces. That is the widest the chip ever gets and the moment a
+   collision would actually happen.
 
-THE ASSUMPTION IT RESTS ON is a UNIFORM PLATE GAP across the compared pieces.
-Note this is not the same unknown as the gap's value: the proxy needs only that
-the gap is the SAME under both pieces, not what it is. Neither has been
-measured. A tilted or unevenly-compressed top plate breaks it, and breaks it
-worst for the pieces furthest apart -- which after three splits is every pair
-that matters. `VOLUME_EQUALITY_ASSUMPTIONS` lists that and three smaller ones
-in full, and `volume_equality().describe()` prints them with the verdict so the
-caveat travels with the claim.
+VOLUME EQUALITY IS A PROXY. It reads the activated electrode area of each
+piece; the plate gap cancels out of a ratio, so equal area gives equal volume
+PROVIDED THE GAP IS UNIFORM -- which is unmeasured, and is the assumption to
+watch. No absolute volume is claimed anywhere in this repo, because
+`ChipConfig.gap_um` is None. `VOLUME_EQUALITY_ASSUMPTIONS` lists all four
+assumptions and `describe()` prints them with every verdict.
 
-Footprint symmetry is separately exact and separately tested: every split is an
-exact 50/50 division and every frame is mirror-symmetric. That is a claim about
-the actuation sequence; the volume claim above is a claim about the plan. The
-proxy is checkable against the rig without new tooling -- `detector` reports
-observed blob area in the same electrode units -- but it has not been checked
-yet, and it measures the plan, not the chip.
-
-LOAD CLEARANCE
-==============
-Centring the stretch is not free. An origin-anchored stretch grows only in
-`+` and needs no room behind the load position; a centred one grows both ways,
-cumulatively down the tree, and for the default 8-piece plan needs 8 clear
-electrodes above/below and 12 either side of the loaded 20x20. The sweep's
-load position (row 5, col 10) does not have that, so `plan_tree(default_root())`
-reports off-grid violations by design rather than clipping silently. See
-`required_margin` and `cleared_root`.
-
-Reporting is not refusing, though, and until 2026-08-13 nothing refused. Call
-`require_clearance(plan)` before handing any plan to an executor: it measures
-`plan_bounds` against the array and raises `ClearanceViolation` naming each
-short side and by how much, and `allow_violations=True` is the only way past.
-Every individual frame is independently gated at `ChipController.activate`, so
-a plan that skips this gate still cannot energise an off-grid electrode -- it
-just finds out several frames in, with liquid already on the chip.
-
-THE LOAD POSITION IS NOT THE SPLIT POSITION
-===========================================
-Resolved this session, and it dissolves the conflict above rather than
-settling it. The clearance requirement is on where the droplet SPLITS. Nothing
-requires a human to load it there. So the operator keeps loading at
-`SweepConfig` (row 5, col 10) -- unchanged, and still the only definition of
-where the sweep loads -- and `plan_approach` walks the 20x20 to the split
-position first, one electrode per grow/release pair, using the transport
-primitive `sweep.grow_release` that this repo already has under test.
+THE LOAD POSITION IS NOT THE SPLIT POSITION. Clearance is required where the
+droplet SPLITS; nothing requires a human to load it there. `plan_approach`
+walks it in, which is what made the split position choosable on merit.
 
     default_root()   where it is LOADED     row 5,  col 10   (SweepConfig)
     split_root()     where it is SPLIT      row 55, col 55   (chosen; centred)
     cleared_root()   the least nudge that fits, for tests    row 9,  col 13
-
-Because the split position is now free rather than forced, it was chosen on
-merit: the chip centre, which is the only position class with room for the
-16-piece tree and the place where a corner-picking scale error costs least.
-`split_root`'s docstring has the full argument and the cost -- 95 electrodes
-of travel, and transport is where liquid gets lost.
-
-Positions here are 1-BASED, electrode (1,1) top-left, matching
-`chiphealth.geometry` and `ChipController._validate`. That was not true before
-2026-08-13: `plan_tree`'s off-grid test read `r0 < 0 or r1 >= rows`, one
-electrode out at every edge and in opposite directions, so `cleared_root()`
-returned (8, 12) -- a position this module called clean and the controller
-refused for 63 of the plan's 87 frames. Both now measure through
-`chiphealth.clearance`, and `cleared_root()` returns (9, 13).
-
-So at least one HEIGHT-axis split is unavoidable, and csvvolcont never
-performs one -- every drop in that file is `MAIN_H = 10` tall from load to
-merge. Its height-axis parameters do not exist to be copied. What transfers
-is the sequencing (stretch, then erode the neck at one electrode per contact
-line per frame at 0.5 s, holding every other piece in every frame) and the
-ratios, both of which are axis-agnostic. `params.SplitParams` applies them to
-whichever axis it is handed. That is a DERIVATION, and it is the main thing in
-this plan that hardware has not yet agreed to.
-
-Six of the eight orderings are legal, and they are not equally good. What
-separates them is the worst aspect ratio any droplet reaches AT FULL STRETCH,
-which is the thinnest it ever gets and therefore the moment it is most likely
-to neck down on its own:
-
-    W,H,W  3.6    W,H,H  3.6    H,W,W  3.6    H,W,H  3.6
-    W,W,H  7.2    H,H,W  7.2
-    W,W,W  refused (20 -> 10 -> 5, and 5 will not halve)   H,H,H  likewise
-
-The two bad orderings are exactly the ones that spend both same-axis splits
-BEFORE touching the other axis: that drives one dimension to 5 electrodes and
-then stretches the other to 35, giving a 35x5 sliver 1.23 mm wide. That is
-where liquid breaks up and throws satellites unbidden, and satellite control
-is precisely what there is no waveform knob for (§2.3).
-
-W,H,W is the default as one of the four joint-best; the choice among those
-four is arbitrary and all six remain reachable. `test_splitplan` pins this
-table, so an ordering change that makes slivers fails loudly.
-
-
-WHAT THIS PLAN IS AND IS NOT
-============================
-Eight 10x5 pieces is 2.465 x 1.232 mm each at the measured 246.48 um pitch
-(objectives.md §2.1). `1pixsplit.py` reached 5x3, or 1.232 x 0.739 mm. So
-this tree does NOT push the minimum-size floor down -- it is a parallel
-dispensing result: eight pieces of equal, known FOOTPRINT from one load, with
-full provenance for each, and equal volume by the activated-area proxy under a
-uniform gap. Still no figure in nanolitres, here or anywhere else in the repo:
-that needs the gap's value, which the proxy does not supply (§2.4 q3).
-
-That is worth having, but it does not on its own answer §2.4 question 1,
-which asks whether Priority 2's deliverable is smallest-droplet or
-positioning-precision, and which the spec still records as UNANSWERED. A
-uniform 8-way tree is arguably a third thing. Depth is not capped here: the
-planner takes an axis list of any length, so continuing to 16 or 32 pieces is
-a parameter change, and the floor it hits is a finding rather than an input.
 """
 
 from __future__ import annotations

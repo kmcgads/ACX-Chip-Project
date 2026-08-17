@@ -1,7 +1,7 @@
 """Chip actuation: the ``DLLTest.dll`` binding, the arming gate, and a fake rig.
 
 Deduplicates the `Drop` struct, DLL load and `activate()` helper that are
-re-pasted across all 13 legacy scripts (spec/objectives.md §0.1). Adapted from
+re-pasted across all 13 legacy scripts (docs/spec/objectives.md §0.1). Adapted from
 cleanup.py:16-37 and chipsetup.py:27-53, minus the `input()` call between every
 step.
 
@@ -141,7 +141,7 @@ class RealBackend:
         documented signatures while keeping the same names would be a
         stack-corrupting crash, not a Python exception, and no load-time probe
         can catch that. Symbol presence is what is checkable here; the field
-        order and arity live in the contract tests instead (spec/design.md §5.1,
+        order and arity live in the contract tests instead (docs/spec/design.md §5.1,
         ADR-0003).
         """
         missing = [name for name in REQUIRED_EXPORTS if not hasattr(self.lib, name)]
@@ -215,11 +215,11 @@ class RealBackend:
 class FakeBackend:
     """In-memory rig, so the whole stack runs with no hardware and no Windows.
 
-    Default backend on any non-Windows machine (spec/design.md §7, ADR-0001).
+    Default backend on any non-Windows machine (docs/spec/design.md §7, ADR-0001).
 
     ``dead`` injects known-bad electrodes. That matters more than it sounds:
     there is no ground-truth faulty region on the real chip yet
-    (spec/objectives.md §1.4 q11), so injected faults are the only way to test
+    (docs/spec/objectives.md §1.4 q11), so injected faults are the only way to test
     the detector against a known answer before the chip provides one.
     """
 
@@ -297,10 +297,10 @@ class ChipController:
     """Stateful, safe wrapper: owns connection lifetime and the arming gate.
 
     Context manager, so the USB handle is released on **every** exit path
-    including exceptions -- the leak flagged in spec/objectives.md §0.1.
+    including exceptions -- the leak flagged in docs/spec/objectives.md §0.1.
 
     Dry-run is the default. Arming is one obvious step, because the gate must
-    not obstruct real testing (researcher, spec/objectives.md §1.4):
+    not obstruct real testing (researcher, docs/spec/objectives.md §1.4):
 
         --arm   |   ChipController(..., armed=True)   |   ACXCHIP_ARM=1
     """

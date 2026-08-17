@@ -4,7 +4,7 @@ Pure: standard library only. No numpy, no OpenCV, no hardware -- band and step
 planning is arithmetic, and keeping it that way means the whole traversal can be
 unit-tested and its cost known before a single electrode is energised.
 
-Coarse pass (spec/p1_chip_health_design.md §2, phase 4): a 20x20 activated
+Coarse pass (docs/spec/p1_chip_health_design.md §2, phase 4): a 20x20 activated
 window **translates** in a serpentine raster across the chip, carrying the
 droplet with it.
 

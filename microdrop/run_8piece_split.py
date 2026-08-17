@@ -1,114 +1,26 @@
 """
-run_8piece_split.py
-───────────────────
-8-PIECE SPLIT — WIDENED FINAL STAGE, NOT YET CONFIRMED ON HARDWARE
+run_8piece_split.py — 8 pieces of 10x5 from one 20x20 droplet.
 
-⚠ THE "VERIFIED" LABEL HAS BEEN PULLED. It is not re-applied until a live run
-confirms the 4->8 stage separates completely. Tests passing is not that.
+⚠ NOT CONFIRMED ON HARDWARE. The last stage (4->8) was widened on 2026-08-17
+after a live run failed to separate there. A green test suite is not
+verification; do not restore a "verified" label until a live run parts all
+eight pieces. Why 2.2, what it costs, and why widening buys margin rather than
+fixing a root cause: docs/guides/separation-and-dwell-tuning.md
 
-WHY IT WAS PULLED — 2026-08-17
-──────────────────────────────
-A live run of the previously-verified configuration did NOT fully separate at
-the last stage: the four 10x10 parents stretched and eroded, but the pieces
-did not come completely apart. That contradicts the 2026-08-13 run this file
-was built to reproduce, and the git tag `split-8piece-verified` should be read
-with that in mind -- it records what was believed on that date, and the belief
-did not survive contact with the chip a second time.
+⚠ ALWAYS ARMED. There is no dry run. Opening the chip issues SetPower and
+SetVolt, so THE RAILS COME UP BEFORE THE FIRST GATE IS ASKED. Answering `n` at
+the phase 0 voltage gate stops the run before any electrode is energised, but
+not before the supply is live. `--arm` is accepted and does nothing.
+Hardware-free check: `python -m microdrop.protocol --plan-only`
 
-READ THE NEXT PARAGRAPH BEFORE TRUSTING THE FIX BELOW.
+Every parameter below is HARDCODED, and check_geometry() refuses to run if the
+planner stops producing them -- a script that can be pointed at a different
+geometry stops being a record of anything. Nothing about the split is
+recomputed here: geometry lives in `microdrop.splitplan`, sequencing in
+`microdrop.protocol`, both under test.
 
-THE GEOMETRY WAS IDENTICAL ACROSS BOTH RUNS. Same script, same hardcoded
-numbers, same plan, frame for frame. So whatever differed between a working
-4->8 and a failing one, IT WAS NOT THE GEOMETRY. Widening the final stage, as
-this file now does, does not address a root cause -- it buys margin against a
-cause that has not been identified. Candidates that geometry cannot fix, and
-that no dry run can rule out: droplet volume at load, filler oil, chip surface
-state or residue from a prior run, actual rail voltage under load, dwell at
-the smallest pieces, plate gap. If the widened stage also fails, the answer is
-in that list and not in a larger number here.
-
-WHAT CHANGED, AND ONLY THIS
-───────────────────────────
-The LAST stage (4->8) now stretches its 10-electrode parents to 22 instead of
-18, opening the neck gap from 8 to 12 -- the two children of each split end up
-12 electrodes apart instead of 8. Stages 0 and 1 are untouched, frame for
-frame, because they worked: both still stretch 20 -> 36 at the proven 1.75
-ratio over 17 frames.
-
-Separation is not a margin that can be set. `SplitParams.neck_gap` is
-`stretch_to(extent) - extent`, so the only lever on how far apart two children
-land is how far their parent was stretched first. Widening therefore means
-leaving the one number in `params.py` that came whole from a working script
-(`STRETCH_RATIO = 1.75`, csvvolcont L230-235). At the last stage this file now
-uses 2.2, which is off that evidence: it asks the same liquid to follow a
-longer pad. That is the intended mechanism -- a thinner neck breaks more
-readily -- but it is also how you get a satellite in the middle instead of a
-clean break, and nothing here knows where that limit is.
-
-WHY 2.2 AND NOT MORE. Widening pushes each child outwards, towards the
-NEIGHBOURING group's child, so sibling separation and non-sibling separation
-move in opposite directions. Measured at the fixed split position:
-
-    ratio    sibling sep    nearest non-sibling    tree frames   violations
-    1.75              8                      8             87            0
-    2.2              12                      4            103            0
-    2.4              14                      2            111            0
-    2.6              16                      0            119            6
-
-2.4 is available and puts the siblings 14 apart, but it leaves two settled
-pieces from different groups only 2 electrodes apart, which is the planner's
-own floor and a merge risk in the other direction. 2.6 collides outright.
-2.2 is the largest step that keeps everything comfortable; going further needs
-the four groups spread out first, which would mean changing the earlier stages
-that already work.
-
-Every parameter below is HARDCODED. There is no flag to change the position,
-the axis order or the piece count, and that is the point: the moment this
-script can be pointed at a different geometry it stops being a record of
-anything.
-
-Each run:
-  1. Connect, power up, and verify the 45V rails read back
-  2. Energise a 20x20 hold at row 5, col 55 and wait for the operator to load
-  3. Walk the droplet 50 electrodes down column 55 to row 55, col 55
-  4. Split W -> H -> W into 8 pieces of 10x5, pausing for a piece count
-     after each stage. The last stage is the widened one -- that is the gate
-     to look hardest at
-  5. Print what the run claims and what it did not verify
-
-NOTE — no camera, and what that costs
-─────────────────────────────────────
-Nothing here imports cv2, numpy or any calibration. Positions are electrode
-indices commanded straight through ActivateElec, so no homography is involved
-and none is needed. The consequence is that YOU are the only verification:
-this API has no per-electrode readback, so the four y/n gates below are the
-sole evidence that anything actuated. Answering `n` at any gate stops the run.
-
-NOTE — THIS SCRIPT IS ALWAYS ARMED
-──────────────────────────────────
-There is no dry run. Running this file energises the chip: opening it issues
-SetPower(True) and SetVolt, so THE RAILS COME UP BEFORE YOU ARE ASKED
-ANYTHING. The first gate -- the phase 0 voltage confirmation -- happens with
-45V already commanded, and answering `n` there stops the run before any
-electrode is activated, but not before the supply is live.
-
-`--arm` is still accepted so old muscle memory does not error out at the rig,
-but it does nothing.
-
-For a check that touches no hardware, this is not the script. Use:
-
-    python -m microdrop.protocol --plan-only
-
-which opens no USB handle, asks nothing and energises nothing.
-
-NOTE — relationship to microdrop/protocol.py
-────────────────────────────────────────────
-This file is a front end, not a reimplementation. All the split geometry --
-the centred stretch, the centre-out erosion, the clearance gate, the tree --
-lives in `microdrop.splitplan` and is driven by `microdrop.protocol`, both of
-which are covered by the test suite. Nothing about the split is recomputed
-here. What this file owns is the hardcoding, the presentation and the refusal
-to run against the wrong rig.
+Operator gates, exit codes, and what a camera-free run cannot verify:
+docs/guides/running-the-split-scripts.md
 
 Usage: python microdrop/run_8piece_split.py    (live -- there is no other mode)
 """
@@ -132,20 +44,17 @@ from microdrop import splitplan as SP
 from microdrop.protocol import OperatorAbort, SplitSession
 
 # ── The configuration ─────────────────────────────────────────────────────────
-# Load, walk and split positions are the live-tested ones and are unchanged.
-# The final-stage stretch is not -- see the header. Written out rather than read
-# from splitplan's defaults on purpose: if a later change moves `split_root` or
-# `DEFAULT_AXES` for 16- or 32-piece work, this script must keep doing what it
-# says on the tin, or refuse. See check_geometry().
+# Written out rather than read from splitplan's defaults on purpose: if a later
+# change moves `split_root` or `DEFAULT_AXES`, this script must keep doing what
+# it says or refuse. See check_geometry().
 
 LOAD_ROW, LOAD_COL = 5, 55      # where the operator loads the droplet
 SPLIT_ROW, SPLIT_COL = 55, 55   # where the tree runs
 DROPLET_H, DROPLET_W = 20, 20   # the starting droplet
 AXES = ("W", "H", "W")          # 3 stages -> 8 pieces
 
-# Applies to stage 2 -- the last -- only; stages 0 and 1 keep the proven 1.75.
-# This is the single number that changed on 2026-08-17 and the only reason this
-# file no longer says "verified". See SplitParams.stage_stretch_ratios.
+# Stage 2 (the last) only; stages 0 and 1 keep the proven 1.75 because they
+# worked. docs/guides/separation-and-dwell-tuning.md
 FINAL_STRETCH_RATIO = 2.2
 STAGE_STRETCH_RATIOS = ((2, FINAL_STRETCH_RATIO),)
 
@@ -203,26 +112,17 @@ def confirm(question: str, detail: str = "") -> bool:
 def check_geometry(session: SplitSession) -> SP.Approach:
     """Refuse to run if the planner no longer produces the expected geometry.
 
-    The whole value of this script is being the record of a run that worked on
-    hardware. If `splitplan` changes -- a different stretch ratio, a different
-    erosion pattern, a re-tuned neck gap -- the numbers below move, and a
-    script that quietly ran the new geometry under the old name would destroy
-    exactly the thing it exists to preserve.
-
-    Returns the approach, so the caller does not have to reach back into
-    `session.approach` and re-establish that it exists. See the refusal below.
+    A script that quietly ran a new geometry under the old name would destroy
+    the thing it exists to preserve. Returns the approach so the caller need
+    not re-establish that it exists.
+    See CONTRIBUTING.md#the-check_geometry-pattern.
     """
     plan, approach = session.plan, session.approach
 
-    # Checked first and raised immediately rather than collected into
-    # `problems` below, because it is a different kind of failure. Every other
-    # check here detects `splitplan` moving under a script that claims to be a
-    # fixed record. A missing approach cannot mean that: `SplitSession` only
-    # leaves it None when `transport` is False or `approach_from` is None, both
-    # of which are hardcoded above. So this fires for an edit to THIS file, and
-    # says so. Raising here is also what lets the return type promise a real
-    # Approach -- a type checker cannot tell that appending to `problems`
-    # guarantees the `if problems` raise below.
+    # Raised here rather than collected into `problems`: a missing approach
+    # means THIS file lost transport=True or approach_from, not that splitplan
+    # moved. Raising is also what lets the return type promise a real Approach
+    # -- a checker cannot see that a non-empty `problems` implies the raise.
     if approach is None:
         raise SystemExit(
             "\n  REFUSING TO RUN: no approach was planned, so the droplet would\n"
@@ -240,10 +140,8 @@ def check_geometry(session: SplitSession) -> SP.Approach:
     if plan.n_frames != EXPECT_TREE_FRAMES:
         problems.append(f"{plan.n_frames} tree frames, expected {EXPECT_TREE_FRAMES}")
 
-    # The two halves of the 2026-08-17 change, pinned separately so neither can
-    # drift into the other. The final gap is what was widened; the early gap is
-    # what must NOT have been, because those stages worked on hardware and the
-    # whole point of a per-stage ratio is leaving them alone.
+    # Pinned separately so neither can drift into the other: the final gap is
+    # what was widened, the early gap is what must NOT have been.
     last = len(AXES) - 1
     final_gaps = {s.neck_gap for s in plan.steps if s.stage == last}
     early_gaps = {s.neck_gap for s in plan.steps if s.stage < last}
@@ -287,8 +185,8 @@ def main() -> int:
                     "this script energises the chip. There is no dry run -- "
                     "use `python -m microdrop.protocol --plan-only` for a "
                     "check that touches no hardware.")
-    # Accepted and ignored. Kept only so that typing the flag this script used
-    # to need does not abort the run with `unrecognized arguments` at the rig.
+    # Accepted and ignored, so old muscle memory does not abort a run at the
+    # rig with `unrecognized arguments`.
     ap.add_argument("--arm", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
@@ -316,12 +214,8 @@ def main() -> int:
         + ("  <- NOT the hardware" if is_fake else f"  ({DEFAULT_DLL_DIR})"))
 
     if is_fake:
-        # A fake rig satisfies the rail check identically to a real one, so an
-        # accidental fake run reads as a success that moved no liquid. This
-        # cost a debugging session on 2026-08-13; it does not get to happen
-        # again quietly. Now that there is no dry run, there is no reason at
-        # all to be here on the fake backend, so this refuses unconditionally
-        # rather than only when arming.
+        # A fake rig passes the rail check identically to a real one, so an
+        # accidental fake run reads as a success that moved no liquid.
         print("\n  The vendor DLL did not load, so this run would energise\n"
               "  nothing while looking exactly like one that did.\n"
               "  Almost always: you are on WSL/Linux, where the Windows x64 DLL\n"
@@ -337,8 +231,7 @@ def main() -> int:
                           power_settle_s=cfg.power_settle_s)
 
     # ── The run ────────────────────────────────────────────────────────────
-    # Every geometric decision is delegated. This script chooses the numbers;
-    # splitplan decides what frames they imply.
+    # This script chooses the numbers; splitplan decides what frames they imply.
     session = SplitSession(
         chip=chip,
         root=SP.DropNode(id="d", parent=None, stage=0,

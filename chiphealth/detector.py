@@ -10,7 +10,7 @@ over recorded video when the thresholds improve.
 
 The three signatures were **observed on this rig by the researcher**, not
 inferred: a droplet passing over a bad electrode visibly drags, and sometimes
-leaves part of itself behind (spec/objectives.md §1.7).
+leaves part of itself behind (docs/spec/objectives.md §1.7).
 
 Every verdict is *observed versus commanded*. Nothing here interprets an
 observation on its own, because there is no per-electrode readback to check it

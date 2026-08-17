@@ -2,7 +2,7 @@
 
 The contract tests pin the facts recovered by disassembly in
 workspace/analysis.md §2, so a vendor DLL swap fails loudly here rather than
-corrupting the stack at runtime (spec/design.md §7).
+corrupting the stack at runtime (docs/spec/design.md §7).
 """
 
 import ctypes

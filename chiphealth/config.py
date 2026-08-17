@@ -1,7 +1,7 @@
 """Configuration for the chip-health run.
 
 Replaces the hardcoded literals scattered through the legacy scripts
-(spec/objectives.md §0.1). Every value below appeared as a magic number in at
+(docs/spec/objectives.md §0.1). Every value below appeared as a magic number in at
 least one of project/*.py; the source is cited where that is the case.
 
 Nothing here reads the filesystem or the hardware at import time.
@@ -35,7 +35,7 @@ class ChipConfig:
     # and the constant that converts electrode counts into real distance.
     #
     # RESOLVED 2026-08-10 by researcher measurement, closing the question
-    # deferred at spec/objectives.md §1.4 and §2.1 (§2.1 was §3.1 before the
+    # deferred at docs/spec/objectives.md §1.4 and §2.1 (§2.1 was §3.1 before the
     # 2026-08-12 priority renumbering):
     #
     #     active grid   31.55 mm square  (995.4025 mm^2)
@@ -61,7 +61,7 @@ class ChipConfig:
 
     # Voltage rails. 45V on the first three, matching chipsetup.py:47 and
     # cleanup.py:64-72. 45V is the agreed degradation-tracking baseline
-    # (spec/objectives.md §1.4) -- lower voltages do not actuate reliably and
+    # (docs/spec/objectives.md §1.4) -- lower voltages do not actuate reliably and
     # would manufacture false dead electrodes.
     volts: tuple[int, ...] = (45, 45, 45, 0, 0, 0, 0, 0, 0)
 
@@ -110,7 +110,7 @@ class ChipConfig:
 
 @dataclass
 class SweepConfig:
-    """Coarse-pass geometry (spec/p1_chip_health_design.md §2, phase 4)."""
+    """Coarse-pass geometry (docs/spec/p1_chip_health_design.md §2, phase 4)."""
 
     # The operator-loaded starting droplet: 20x20 at row 5, col 10.
     #
@@ -229,7 +229,7 @@ class DetectorConfig:
     """Thresholds for the three failure signatures.
 
     All of these are ESTIMATES. There is no ground-truth bad region on this chip
-    (spec/objectives.md §1.4 q11), so the first runs are threshold calibration
+    (docs/spec/objectives.md §1.4 q11), so the first runs are threshold calibration
     rather than measurement, and early verdicts are provisional. The artifact is
     designed so runs can be re-scored offline once better values are known
     (rescore.py).
@@ -258,7 +258,7 @@ class DetectorConfig:
 
 @dataclass
 class CaptureConfig:
-    """Video, stills and dataset capture (spec/objectives.md §1.8)."""
+    """Video, stills and dataset capture (docs/spec/objectives.md §1.8)."""
 
     # OpenCV/DirectShow device index. NOT a fixed property of the microscope --
     # it depends on which cameras are connected when the process starts, so it
@@ -315,14 +315,14 @@ class CaptureConfig:
     still_interval_s: float = 5.0
 
     # Matched negatives: an all-positive dataset cannot train a classifier
-    # (spec/objectives.md §1.8). Fraction of clean steps sampled and saved.
+    # (docs/spec/objectives.md §1.8). Fraction of clean steps sampled and saved.
     negative_sample_rate: float = 0.02
 
     baseline_frames: int = 10
 
     # Mid-run top-up. All loading is manual, and more liquid CAN be added during
     # a run, so the script asks for it rather than assuming everything is
-    # present at the start (spec/objectives.md §1.4 q1).
+    # present at the start (docs/spec/objectives.md §1.4 q1).
     topup_enabled: bool = True
     topup_area_frac: float = 0.5    # of the commanded window area
     topup_after_steps: int = 5      # consecutive low/missing observations
@@ -344,7 +344,7 @@ class RunConfig:
     runs_root: Path = Path("runs")
     chip_id: str = ""  # mandatory at run time -- see require_chip_id()
 
-    armed: bool = False  # dry-run is the default (spec/objectives.md §1.4)
+    armed: bool = False  # dry-run is the default (docs/spec/objectives.md §1.4)
     backend: str = "auto"  # "auto" | "real" | "fake"
 
     headless: bool = False  # skip the live window
@@ -379,7 +379,7 @@ class RunConfig:
 def from_env(cfg: RunConfig | None = None) -> RunConfig:
     """Apply environment overrides.
 
-    ACXCHIP_ARM=1  arms the session (spec/objectives.md §1.4 -- the disarm/arm
+    ACXCHIP_ARM=1  arms the session (docs/spec/objectives.md §1.4 -- the disarm/arm
                    switch must be obvious and easy, not a hidden ceremony).
     ACXCHIP_DLL    overrides the DLL directory.
     """

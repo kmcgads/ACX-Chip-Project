@@ -1,94 +1,45 @@
 """Split parameters, traced to ``colormixing/csvvolcont.py``.
 
-WHERE THIS DELIBERATELY DIVERGES FROM csvvolcont
-================================================
-Decided by the researcher 2026-08-13, after a stage-by-stage symmetry audit:
-where csvvolcont's mechanics and true 50/50 halving conflict, SYMMETRY WINS.
-csvvolcont dispenses from a stationary reservoir, which is a different
-problem, and two of its details are actively wrong for halving:
+Every value below is either PROVEN -- a literal from that file -- or DERIVED
+from its ratios for a geometry it never performs. Which is which, the line
+numbers, and why csvvolcont rather than `1pixsplit.py`:
+docs/guides/provenance.md
 
-1. ONE-SIDED NECK EROSION. csvvolcont pins the bridge's far edge and marches
-   the near one, so the whole neck stays connected to one side and drains
-   there. In a dispense that is the point -- the neck belongs to the
-   reservoir. In a halving it hands ~44% of the stretched footprint to one
-   child. Replaced by CENTRE-OUT erosion: the neck breaks in the middle and
-   each half retracts into its own child. See `erode_steps`.
+WHERE THIS DIVERGES FROM csvvolcont, AND WHY IT MUST
+====================================================
+Researcher decision 2026-08-13: where csvvolcont's mechanics and a true 50/50
+halving conflict, SYMMETRY WINS. csvvolcont dispenses from a stationary
+reservoir, which is a different problem, and two of its details are actively
+wrong for halving:
 
-2. ORIGIN-ANCHORED STRETCH. csvvolcont grows in one direction because the
-   reservoir cannot move. In a halving that makes one child travel the whole
-   stretch while the other barely moves. Replaced by a CENTRE-ANCHORED
-   stretch: both contact lines advance one electrode per frame, in opposite
-   directions. See `stretch_steps` and `splitplan._stretch_origin`.
+1. ONE-SIDED NECK EROSION drains the whole neck into one side. In a dispense
+   the neck belongs to the reservoir; in a halving it hands ~44% of the
+   stretched footprint to one child. Replaced by CENTRE-OUT erosion.
+2. ORIGIN-ANCHORED STRETCH makes one child travel the whole surplus while the
+   other barely moves. Replaced by a CENTRE-ANCHORED stretch.
 
-Both changes force an EVEN neck gap -- an odd gap cannot be halved on an
-integer grid, in space or in erosion order -- which is why `stretch_to`
-rounds to even (`_round_even`) rather than to nearest. That is the one place
-a proven number moved: 20 -> 35 became 20 -> 36. See `_round_even`.
+Both force an EVEN neck gap -- an odd gap cannot be halved on an integer grid,
+in space or in erosion order -- which is why `stretch_to` rounds to even rather
+than to nearest, and is the one place a proven number moved (20 -> 35 became
+20 -> 36).
 
-What is inherited unchanged: the stretch-then-split ORDER, the 1.75 stretch
-ratio, one electrode per contact line per frame, the 0.5 s dwell, and holding
-every live piece in every frame.
+Inherited unchanged: the stretch-then-split ORDER, the 1.75 ratio, one
+electrode per contact line per frame, the 0.5s dwell, and holding every live
+piece in every frame.
 
-FOOTPRINT, AND WHAT IT NOW BUYS
-===============================
-Everything below is symmetric in ELECTRODE FOOTPRINT, and the tests verify that
-exactly.
+TWO GAPS csvvolcont DOES NOT COVER, both flagged where they are used:
 
-As of 2026-08-13 that also settles volume EQUALITY, under one assumption. The
-method changed (researcher): equality is no longer pending a `ChipConfig.gap_um`
-measurement plus imaging of the pieces, it is based on the activated electrode
-area of each piece -- pixel size of the activated region, in electrode units.
-The gap cancels out of a ratio (`V = A x g`, so `V_a/V_b = A_a/A_b`), so equal
-footprint gives equal volume PROVIDED THE GAP IS UNIFORM across the two
-children. That uniformity is unmeasured and is the assumption to watch; a
-tilted or unevenly-compressed top plate breaks it. See
-`splitplan.volume_equality` and `splitplan.VOLUME_EQUALITY_ASSUMPTIONS`.
+1. It only ever splits along WIDTH -- every drop in it is 10 tall from load to
+   merge. An 8-piece tree needs at least one height split, so the height-axis
+   behaviour is a DERIVATION and is the main thing hardware has not agreed to.
+2. It DISPENSES rather than halves, so a symmetric split's placement is derived
+   from the ratios, not copied.
 
-What has NOT changed: no absolute volume. The proxy gives ratios, not
-quantities, so the unmeasured gap still means no nanolitre figure exists here
-or anywhere in the repo (objectives.md §2.4 q3), and the claim stays
-UNVERIFIED against the rig -- it is a property of the plan, checkable against
-`detector`'s electrode-unit blob areas but not yet checked. Centre-out erosion
-is what makes the two counts equal in the first place; it removed the
-systematic bias one-sided erosion built in.
-
-WHY csvvolcont AND NOT 1pixsplit
-================================
-`1pixsplit.py` is not a reliable basis for this work (researcher, 2026-08-13)
-and is not cited by anything here. This is not a new position for the repo --
-`chiphealth/config.py` already reaches for csvvolcont for exactly this reason
-where the two disagree on timing, calling it "the one legacy script that sets
-voltage with no human in the loop, and therefore the only proven timing this
-binding can actually match" (`volt_settle_s`, `power_settle_s`).
-
-The mechanical difference that matters most for splitting:
-
-    1pixsplit.py  step 3   one ActivateElec call patterns reservoir + piece
-                           and asks the liquid to snap apart in a single
-                           frame. Its own comments say "No neck loop", twice.
-
-    csvvolcont.py step 3   the neck is eroded over `gap+1` frames, one
-                           electrode per frame, and the liquid is given
-                           0.5 s at each. The break is walked, not snapped.
-
-Every parameter below is the csvvolcont value or a ratio derived from it.
-Line numbers refer to `colormixing/csvvolcont.py` at commit 834d4b2.
-
-WHAT csvvolcont DOES NOT COVER
-==============================
-Two gaps, both real, both flagged in the module that uses these values:
-
-1. csvvolcont only ever splits along WIDTH. Every drop it creates is
-   `MAIN_H = 10` tall from load to merge; height is never a split axis. It
-   therefore supplies no proven numbers for a height-axis split, and an
-   8-piece tree needs at least one (see `splitplan` module docstring).
-
-2. csvvolcont DISPENSES -- it takes a 10-wide piece off a 15-wide reservoir
-   remnant. It does not HALVE. A symmetric split is a different geometry and
-   its placement is derived here from the ratios, not copied.
-
-Both derivations are marked DERIVED below. Everything marked PROVEN is a
-literal from the file.
+VOLUME EQUALITY rests on activated electrode area, and the plate gap cancels
+out of a ratio -- but only if the gap is UNIFORM across the compared pieces,
+which is unmeasured. The claim therefore stays UNVERIFIED against the rig: it
+is a property of the PLAN, not a measurement of liquid. No absolute volume is
+claimed here or anywhere in this repo. See docs/guides/volume-equality.md.
 """
 
 from __future__ import annotations
@@ -197,83 +148,46 @@ class SplitParams:
 
     stretch_ratio: float = STRETCH_RATIO
 
-    # Mirror csvvolcont's step 5, which re-energises a bridge from the
-    # reservoir out to the departed piece and then retracts it one electrode at
-    # a time (L277-299) -- but symmetrically: two stubs, one per child, each
-    # retracting into its own child.
-    #
-    # OFF by default, and this is a real open question rather than a
-    # preference. In csvvolcont that step runs AFTER the piece has already
-    # travelled 25 columns away, so the bridge it builds spans 37 columns of
-    # bare chip between two settled drops. Read one way it sweeps the trail
-    # back into the reservoir; read another way the loop bounds are reversed
-    # and it is re-opening a neck that step 3 already closed. Nothing in the
-    # file says which, and a plan for 8 pieces would repeat it 7 times.
-    # Defaulted off so it is a decision, not an inheritance.
+    # csvvolcont's step 5 (L277-299), mirrored: two stubs, one per child.
+    # OFF by default because it is a real open question -- read one way that
+    # step sweeps the trail back into the reservoir, read another the loop
+    # bounds are reversed and it re-opens a neck step 3 already closed. Nothing
+    # in that file says which, and 8 pieces would repeat it 7 times.
     neck_retract: bool = False
 
     #: Per-stage stretch ratio overrides, as (stage_index, ratio) pairs. Empty
-    #: (the default) means every stage uses `stretch_ratio`, which is the
-    #: proven 1.75 and is exactly the behaviour this class had before this
-    #: field existed. A tuple of pairs rather than a dict so the dataclass
-    #: stays frozen and hashable.
+    #: means every stage uses `stretch_ratio`. A tuple of pairs rather than a
+    #: dict so the dataclass stays frozen and hashable.
     #:
-    #: WHY THIS EXISTS. Separation is not a free parameter -- see `neck_gap`,
-    #: which is `stretch_to(e) - e` and therefore fully determined by the ratio
-    #: and the parent extent. There is no margin to widen. The only way to put
-    #: the two children of a split further apart is to stretch their parent
-    #: further before eroding, and this field is that lever, per stage, so that
-    #: stages which work on hardware keep their proven numbers.
+    #: THIS IS THE ONLY LEVER ON SEPARATION. `neck_gap` is `stretch_to(e) - e`,
+    #: so how far apart two children land is fully determined by how far their
+    #: parent was stretched first. There is no margin parameter to widen.
     #:
-    #: PER STAGE, NOT PER PIECE. Every parent within a stage gets the same
-    #: ratio, and that is a constraint rather than an omission. Each split is
-    #: required to be mirror-symmetric about its own parent's centre line
-    #: (`splitplan._stretch_origin` refuses an odd surplus outright, and
-    #: `test_splitplan.TestSymmetry` checks every frame), so the two children
-    #: of one split cannot be pushed out by different amounts. Doing that would
-    #: also give the two neck stubs different lengths, draining the neck
-    #: unevenly into the two children -- the exact csvvolcont bias that
-    #: centre-out erosion exists to remove -- and `volume_equality` would NOT
-    #: catch it, because it counts activated electrodes and both children would
-    #: still be the same size.
+    #: PER STAGE, NEVER PER PIECE. Each split must be mirror-symmetric about its
+    #: parent's centre line (`splitplan._stretch_origin` refuses an odd surplus;
+    #: `TestSymmetry` checks every frame). Unequal placement would also give the
+    #: two neck stubs different lengths, draining the neck unevenly -- and
+    #: `volume_equality` would NOT catch it, because it counts electrodes and
+    #: both children stay the same size.
     #:
-    #: THE COST, STATED PLAINLY. `stretch_ratio` 1.75 is the one number here
-    #: inherited whole from a script that works (csvvolcont L230-235). Any
-    #: override is off that evidence: it asks a fixed volume of liquid to
-    #: follow a longer pad, which thins the film further than anything proven.
-    #: That is the intended mechanism -- a thinner neck breaks more readily --
-    #: but past some ratio the contact line depins, or the middle dewets and
-    #: leaves a satellite instead of a clean break. Nothing here knows where
-    #: that limit is. It is a hardware question.
-    #:
-    #: WATCH THE ASPECT RATIO, NOT THE CHIP MARGIN. What bounds a widening is
-    #: not running out of array -- see `splitplan`'s axis-ordering table, where
-    #: 3.6 at full stretch is joint-best and 7.2 is "where liquid breaks up and
-    #: throws satellites unbidden". Widening an H stage on an already-narrow
-    #: parent is far more expensive in aspect than widening a W stage on a
-    #: square one, so the cheap and expensive overrides do not look alike.
+    #: Any override is off the proven evidence, and what bounds it is the ASPECT
+    #: RATIO at full stretch, not chip margin.
+    #: docs/guides/separation-and-dwell-tuning.md
     stage_stretch_ratios: tuple[tuple[int, float], ...] = ()
 
-    #: EXTRA dwell per frame, in seconds, on top of the controller's step
-    #: delay. 0.0 (the default) is the proven timing and changes nothing.
+    #: EXTRA dwell per frame, in seconds, on top of the controller's step delay.
     #:
-    #: ADDITIVE, NOT ABSOLUTE, and that is deliberate. The baseline lives on
-    #: `ChipController.step_delay_s`, which a dry run sets to 0 so that a
-    #: plumbing check does not sit through the proven dwell (the fix in
-    #: da70561). An absolute per-stage dwell would override that zero and
-    #: resurrect exactly that bug. As an addend it cannot: the controller only
-    #: sleeps at all when its baseline is nonzero.
+    #: ADDITIVE, NOT ABSOLUTE. A dry run sets `ChipController.step_delay_s` to 0
+    #: so a plumbing check does not sit through the proven dwell; an absolute
+    #: per-stage dwell would override that zero and resurrect that bug. As an
+    #: addend it cannot -- the controller only sleeps when its baseline is > 0.
     extra_settle_s: float = 0.0
 
-    #: Per-stage `extra_settle_s` overrides, as (stage_index, seconds) pairs.
-    #: Same shape and same rules as `stage_stretch_ratios`.
-    #:
-    #: SEPARATE FROM THE GEOMETRY OVERRIDE ON PURPOSE. Widening a stage and
-    #: dwelling longer on it are two different hypotheses about why a split
-    #: fails to part -- too little distance, or too little time for the liquid
-    #: to reflow. Keeping them independent is what makes it possible to change
-    #: one and learn something. Setting both at once on the same stage gives a
-    #: result that cannot be attributed.
+    #: Per-stage `extra_settle_s` overrides. Same shape and rules as
+    #: `stage_stretch_ratios`, and deliberately a SEPARATE field: widening and
+    #: dwelling are two different hypotheses about why a split fails to part,
+    #: and setting both on one stage gives a result nobody can attribute.
+    #: docs/guides/separation-and-dwell-tuning.md#the-dwell-experiment
     stage_extra_settle_s: tuple[tuple[int, float], ...] = ()
 
     def for_stage(self, stage: int, n_stages: int) -> "SplitParams":

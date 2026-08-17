@@ -3,14 +3,14 @@
 Pure: standard library only.
 
 This exists because there is no ground-truth faulty region on the real chip
-(spec/objectives.md §1.4 q11). Injected faults are the only way to check that
+(docs/spec/objectives.md §1.4 q11). Injected faults are the only way to check that
 the detector finds what it is supposed to find *before* the chip provides an
 answer -- and the only way to run the whole 867-step pipeline on a machine with
 no camera and no rig.
 
 What it models, from the researcher's directly observed behaviour: a droplet
 passing over a bad electrode **drags**, and when it eventually breaks free it
-**leaves part of itself behind** (spec/objectives.md §1.7).
+**leaves part of itself behind** (docs/spec/objectives.md §1.7).
 
 What it does NOT model, and must not be read as: real electrowetting. There is
 no contact-angle physics here, no surface tension, no dielectric behaviour. It
@@ -176,6 +176,6 @@ def dead_column(col: int, rows: int = 128) -> set[tuple[int, int]]:
 
     The failure mode a matrix-addressed array actually tends to have -- a shared
     drive line or IC channel, not a scattered single electrode
-    (spec/objectives.md §1.7).
+    (docs/spec/objectives.md §1.7).
     """
     return {(r, col) for r in range(1, rows + 1)}
