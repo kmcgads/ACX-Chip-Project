@@ -14,6 +14,7 @@ import unittest
 from chiphealth.actuation import ChipController, Drop, FakeBackend
 from chiphealth.clearance import ClearanceViolation
 from chiphealth.config import ChipConfig
+from microdrop import params as P
 from microdrop import protocol as PR
 from microdrop import splitplan as SP
 from microdrop.protocol import OperatorAbort, SplitSession
@@ -541,6 +542,113 @@ class TestCommandLine(unittest.TestCase):
         text = PR.build_parser().format_help()
         self.assertIn("WITHOUT THIS IT IS A DRY RUN", text)
         self.assertIn("--plan-only", text)
+
+
+class TestPerStageDwell(unittest.TestCase):
+    """`SplitParams.stage_extra_settle_s`: hold one stage's frames longer.
+
+    Added 2026-08-17 to test whether the 8->16 split fails for want of TIME
+    rather than want of distance -- the other hypothesis from the stretch
+    widening, and only answerable if the two are changed separately.
+
+    The dwell lives in two places that must agree: `Frame.settle_s`, which is
+    what `duration_s()` reports, and `ChipController.step_delay_s`, which is
+    what actually sleeps. Before this feature nothing read `Frame.settle_s` at
+    run time, so these tests check the reported and the slept duration against
+    each other rather than each against a constant.
+    """
+
+    AXES = ("W", "H", "W", "H")
+    SP16 = P.SplitParams(stage_stretch_ratios=((2, 2.2), (3, 2.2)),
+                         stage_extra_settle_s=((3, 0.5),))
+
+    def _timed_chip(self, armed=True, baseline=0.5):
+        slept = []
+        c = ChipController(FakeBackend(rows=ROWS, cols=COLS), ROWS, COLS,
+                           (45, 45, 45, 0, 0, 0, 0, 0, 0), armed=armed,
+                           step_delay_s=baseline, sleep=slept.append)
+        c.open()
+        # An armed open() sleeps volt_settle_s (0.3s) after SetVolt. That is
+        # startup, not frame dwell, so it is dropped rather than counted -- the
+        # claim under test is about what each ActivateElec is followed by.
+        slept.clear()
+        return c, slept
+
+    def test_default_is_off_and_every_frame_keeps_the_proven_dwell(self):
+        self.assertEqual(P.DEFAULT.stage_extra_settle_s, ())
+        self.assertEqual(P.DEFAULT.extra_settle_s, 0.0)
+        self.assertEqual(P.DEFAULT.settle_s(), P.PROVEN_SETTLE_S)
+        plan = plan_tree(SP.split_root(), self.AXES)
+        self.assertEqual({f.settle_s for s in plan.steps for f in s.frames},
+                         {P.PROVEN_SETTLE_S})
+
+    def test_only_the_named_stage_is_slowed_in_the_plan(self):
+        plan = plan_tree(SP.split_root(), self.AXES, self.SP16)
+        s3 = {f.settle_s for s in plan.steps if s.stage == 3 for f in s.frames}
+        rest = {f.settle_s for s in plan.steps if s.stage != 3 for f in s.frames}
+        self.assertEqual(s3, {1.0})
+        self.assertEqual(rest, {P.PROVEN_SETTLE_S})
+
+    def test_the_frame_count_does_not_change_only_the_dwell(self):
+        """Slowing a stage must not add or remove a single activation."""
+        geom_only = P.SplitParams(stage_stretch_ratios=((2, 2.2), (3, 2.2)))
+        fast = plan_tree(SP.split_root(), self.AXES, geom_only)
+        slow = plan_tree(SP.split_root(), self.AXES, self.SP16)
+        self.assertEqual(fast.n_frames, slow.n_frames)
+        self.assertEqual([f.label for s in fast.steps for f in s.frames],
+                         [f.label for s in slow.steps for f in s.frames])
+        self.assertAlmostEqual(fast.duration_s(), 103.5)
+        self.assertAlmostEqual(slow.duration_s(), 155.5)   # 104 frames x +0.5s
+
+    def test_what_is_slept_matches_what_the_plan_reports(self):
+        """The two dwell sources agreeing is the whole correctness claim."""
+        c, slept = self._timed_chip()
+        s, _ = session(chip=c, root=SP.split_root(), axes=self.AXES,
+                       sp=self.SP16,
+                       approach_from=SP.DropNode(id="d", parent=None, stage=0,
+                                                 height=20, width=20,
+                                                 row=5, col=55))
+        s.run()
+        self.assertEqual(sorted(set(slept)), [0.5, 1.0])
+        self.assertEqual(slept.count(1.0), 104)            # stage 3 only
+        self.assertAlmostEqual(
+            sum(slept), s.approach.duration_s() + s.plan.duration_s())
+
+    def test_a_dry_run_still_sleeps_nothing(self):
+        """The da787-era regression guard: an extra must never fire against a
+        zero baseline, or an unarmed plumbing check sits through the dwell
+        again (da70561)."""
+        c, slept = self._timed_chip(armed=False, baseline=0.0)
+        s, _ = session(chip=c, root=SP.split_root(), axes=self.AXES,
+                       sp=self.SP16,
+                       approach_from=SP.DropNode(id="d", parent=None, stage=0,
+                                                 height=20, width=20,
+                                                 row=5, col=55))
+        s.run()
+        self.assertEqual(slept, [])
+
+    def test_a_negative_extra_cannot_shorten_the_proven_dwell(self):
+        c, slept = self._timed_chip()
+        c.activate([Drop(2, 2, 10, 10)], settle=True, extra_settle_s=-10.0)
+        self.assertEqual(slept, [0.5])
+
+    def test_an_extra_for_a_stage_that_does_not_exist_raises(self):
+        sp = P.SplitParams(stage_extra_settle_s=((9, 0.5),))
+        with self.assertRaises(ValueError) as ctx:
+            plan_tree(SP.split_root(), self.AXES, sp)
+        self.assertIn("stage_extra_settle_s", str(ctx.exception))
+
+    def test_the_operator_is_told_which_stage_is_slowed(self):
+        c, _ = self._timed_chip()
+        s, op = session(chip=c, root=SP.split_root(), axes=self.AXES,
+                        sp=self.SP16,
+                        approach_from=SP.DropNode(id="d", parent=None, stage=0,
+                                                  height=20, width=20,
+                                                  row=5, col=55))
+        s.run()
+        said = [m for m in op.told if "extra" in m]
+        self.assertEqual(len(said), 1)
+        self.assertIn("stage 3", said[0])
 
 
 if __name__ == "__main__":

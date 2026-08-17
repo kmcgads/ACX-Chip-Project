@@ -33,6 +33,38 @@ the widened 8-piece had not yet been re-run, so whether a gap of 12 helps AT
 ALL is untested. If these stages still fail at 12, the answer is in that list
 and not in a larger number here.
 
+THE DWELL EXPERIMENT — STAGE 3 ONLY
+───────────────────────────────────
+Separate question from the widening, deliberately: does 8->16 fail for want
+of TIME rather than want of distance? Stage 3 now holds each of its 104
+frames for 1.0s instead of the proven 0.5s. Nothing else changes -- not the
+global step delay, not the approach walk, not stages 0-2.
+
+STAGE 2 IS THE CONTROL. It is widened exactly like stage 3 and NOT slowed, so
+the two differ in one intended variable. Read the result:
+
+  stage 2 parts, stage 3 parts    widening was enough; the extra time is
+                                  unproven and should come back out
+  stage 2 fails, stage 3 parts    points at dwell -- the useful outcome
+  both fail                       neither distance nor time at these values;
+                                  look at droplet volume, oil, surface state,
+                                  voltage under load, plate gap
+  stage 2 parts, stage 3 fails    stage 3 is harder than stage 2 for a reason
+                                  neither knob addresses -- most likely the
+                                  aspect ratio noted below
+
+THE CONTROL IS GOOD BUT NOT PERFECT. Stage 2 and stage 3 differ in axis (W vs
+H) and in parent shape (10x10 vs 10x5) as well as in dwell, so a difference
+between them is not attributable to time alone. A clean single-variable test
+would run this tree twice, once with the dwell and once without.
+
+WHERE THE TIME GOES. Each of stage 3's eight splits is 13 frames -- 6 STRETCH
+then 7 ERODE -- and every one of the 13 gets the extra 0.5s, so roughly half
+the added time is spent stretching and half opening the neck. If the aim is
+specifically to give the liquid longer to part, the erode frames are the ones
+that matter; the stretch frames are along for the ride. Splitting the two
+would need a per-phase dwell, which does not exist.
+
 WHY PER STAGE AND NOT PER PIECE
 ───────────────────────────────
 The obvious idea -- push the outward-facing child of each split further out
@@ -184,6 +216,14 @@ AXES = ("W", "H", "W", "H")     # 4 stages -> 16 pieces
 WIDENED_RATIO = 2.2
 STAGE_STRETCH_RATIOS = ((2, WIDENED_RATIO), (3, WIDENED_RATIO))
 
+# THE DWELL EXPERIMENT, 2026-08-17. Stage 3 only, and stage 3 only ON PURPOSE:
+# this asks whether 8->16 fails for want of TIME rather than want of distance,
+# and an experiment run on two stages at once cannot answer that. Stage 2 keeps
+# the proven dwell, so it is the control -- if stage 2 still fails at 0.5s and
+# stage 3 now succeeds at 1.0s, the extra time is what did it.
+STAGE3_EXTRA_SETTLE_S = 0.5
+STAGE_EXTRA_SETTLE_S = ((3, STAGE3_EXTRA_SETTLE_S),)
+
 # What the above must produce. Taken from `python -m microdrop.protocol
 # --plan-only --axes WHWH --stretch-stage 2:2.2 --stretch-stage 3:2.2` on
 # 2026-08-17. These are DRY-RUN expectations: they pin the planner, they do not
@@ -193,9 +233,15 @@ EXPECT_PIECES = 16
 EXPECT_LEAF = (5, 5)            # electrodes; 1.232 x 1.232 mm at the 246.48um pitch
 EXPECT_WALK_ELECTRODES = 50
 EXPECT_APPROACH_FRAMES = 100
-EXPECT_TREE_FRAMES = 207        # was 159 unwidened; 1 + 100 + 207 = 308, ~154s
-EXPECT_WIDENED_GAP = 12         # stages 2 and 3. Was 8. THE CHANGE
+EXPECT_TREE_FRAMES = 207        # was 159 unwidened. 1 + 100 + 207 = 308 frames
+EXPECT_WIDENED_GAP = 12         # stages 2 and 3. Was 8. THE GEOMETRY CHANGE
 EXPECT_EARLY_GAP = 16           # stages 0-1, unchanged and must stay unchanged
+
+# Frame COUNT is unchanged by the dwell experiment -- only how long each frame
+# is held. Stage 3 is 8 splits x 13 frames = 104 frames, so +0.5s each is +52s.
+EXPECT_STAGE3_FRAMES = 104
+EXPECT_TREE_DWELL_S = 155.5     # was 103.5 at a flat 0.5s
+EXPECT_TOTAL_DWELL_S = 205.5    # + the 50s approach walk. Was 153.5
 
 STEP_DELAY_S = P.PROVEN_SETTLE_S    # 0.5s, csvvolcont.py:137
 BAR = "=" * 68
@@ -215,6 +261,21 @@ UNVERIFIED_NOTE = (
     "liquid throws satellites, so watch stage 3 for satellites specifically. "
     "Do not cite this configuration as proven on the strength of one "
     "transcript.")
+
+#: The dwell experiment, carried into the report alongside the geometry note.
+#: Two variables are in play in this run and only one of them is isolated;
+#: saying so in the artifact is the difference between a result and an anecdote.
+DWELL_NOTE = (
+    "DWELL EXPERIMENT, STAGE 3 ONLY: stage 3 holds each of its 104 frames for "
+    "1.0s instead of the proven 0.5s. Stages 0-2 keep 0.5s, so stage 2 is the "
+    "control -- it is widened exactly like stage 3 but not slowed. READ THE "
+    "RESULT THIS WAY: stage 2 parts and stage 3 parts means widening was "
+    "enough and the extra time is unproven; stage 2 fails and stage 3 parts "
+    "points at dwell; both fail means neither distance nor time at these "
+    "values is the answer and the cause is elsewhere (droplet volume, oil, "
+    "surface state, voltage under load, plate gap). Note the confound: stage 2 "
+    "and stage 3 differ in axis and parent shape as well as dwell, so the "
+    "control is good but not perfect.")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -307,6 +368,27 @@ def check_geometry(session: SplitSession) -> SP.Approach:
         problems.append(f"stage 0-1 neck gap {sorted(early)}, expected "
                         f"{EXPECT_EARLY_GAP} -- the widening must apply to "
                         f"stages 2 and 3 only; 0 and 1 have worked on hardware")
+
+    # The dwell experiment, pinned on both sides. Stage 3 must be slowed and
+    # every other stage must NOT be, or the run stops being an experiment about
+    # stage 3 and becomes an uncontrolled timing change.
+    s3 = [f for s in plan.steps if s.stage == 3 for f in s.frames]
+    others = [f for s in plan.steps if s.stage != 3 for f in s.frames]
+    want3 = P.PROVEN_SETTLE_S + STAGE3_EXTRA_SETTLE_S
+    if len(s3) != EXPECT_STAGE3_FRAMES:
+        problems.append(f"{len(s3)} stage-3 frames, expected "
+                        f"{EXPECT_STAGE3_FRAMES}")
+    if {f.settle_s for f in s3} != {want3}:
+        problems.append(f"stage-3 dwell {sorted({f.settle_s for f in s3})}, "
+                        f"expected {want3}s")
+    if {f.settle_s for f in others} != {P.PROVEN_SETTLE_S}:
+        problems.append(
+            f"stage 0-2 dwell {sorted({f.settle_s for f in others})}, expected "
+            f"the proven {P.PROVEN_SETTLE_S}s -- stage 2 is the CONTROL for "
+            f"this experiment and must keep it")
+    if abs(plan.duration_s() - EXPECT_TREE_DWELL_S) > 0.01:
+        problems.append(f"tree dwell {plan.duration_s()}s, expected "
+                        f"{EXPECT_TREE_DWELL_S}s")
     if approach.electrodes != EXPECT_WALK_ELECTRODES:
         problems.append(f"walk is {approach.electrodes} electrodes, "
                         f"expected {EXPECT_WALK_ELECTRODES}")
@@ -360,8 +442,13 @@ def main() -> int:
           f"(not {P.STRETCH_RATIO}); neck gap 8 -> {EXPECT_WIDENED_GAP} on both")
     print(f"  status   stages 0-1 unchanged at the proven ratio, gap "
           f"{EXPECT_EARLY_GAP}")
-    print(f"  WATCH    gates 5 and 6 -- both stages failed to separate live,")
-    print(f"           and both are widened here for the first time")
+    print(f"  dwell    stage 3 holds each frame "
+          f"{P.PROVEN_SETTLE_S + STAGE3_EXTRA_SETTLE_S}s "
+          f"(+{STAGE3_EXTRA_SETTLE_S}s); stages 0-2 keep the proven "
+          f"{P.PROVEN_SETTLE_S}s")
+    print(f"  WATCH    gates 5 and 6 -- both stages failed to separate live.")
+    print(f"           Gate 5 (stage 2) is widened only: the DWELL CONTROL.")
+    print(f"           Gate 6 (stage 3) is widened AND slowed.")
     print(f"  mode     ARMED — the rails come up on connect and electrodes "
           f"will be energised")
 
@@ -405,7 +492,8 @@ def main() -> int:
                          row=SPLIT_ROW, col=SPLIT_COL),
         axes=AXES,
         cfg=cfg,
-        sp=P.SplitParams(stage_stretch_ratios=STAGE_STRETCH_RATIOS),
+        sp=P.SplitParams(stage_stretch_ratios=STAGE_STRETCH_RATIOS,
+                         stage_extra_settle_s=STAGE_EXTRA_SETTLE_S),
         transport=True,
         approach_from=SP.DropNode(id="d", parent=None, stage=0,
                                   height=DROPLET_H, width=DROPLET_W,
@@ -415,10 +503,12 @@ def main() -> int:
     )
     approach = check_geometry(session)
     session.notes.append(UNVERIFIED_NOTE)
+    session.notes.append(DWELL_NOTE)
 
     total = 1 + approach.n_frames + session.plan.n_frames
     say("Plan", f"{total} frames, ~{approach.duration_s() + session.plan.duration_s():.0f}s "
-                f"of dwell at {STEP_DELAY_S}s")
+                f"of dwell — {STEP_DELAY_S}s a frame everywhere except stage 3, "
+                f"which holds {P.PROVEN_SETTLE_S + STAGE3_EXTRA_SETTLE_S}s")
 
     with chip:
         banner("PHASE 0 — power and rails")

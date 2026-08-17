@@ -430,6 +430,7 @@ def split_frames(parent: DropNode, axis: Axis, held: Sequence[DropNode],
         frames.append(Frame(
             label=f"{parent.id} STRETCH {axis} {e + 2 * i}",
             drops=hold + (_stretched(parent, axis, e + 2 * i),),
+            settle_s=sp.settle_s(),
         ))
 
     # Stub roots: the inner edge of each child, where its half of the neck
@@ -446,7 +447,8 @@ def split_frames(parent: DropNode, axis: Axis, held: Sequence[DropNode],
             lbl = f"{parent.id} ERODE dry={2 * k} stub={stub}"
         else:
             lbl = f"{parent.id} ERODE open"
-        frames.append(Frame(label=lbl, drops=hold + tuple(pieces)))
+        frames.append(Frame(label=lbl, drops=hold + tuple(pieces),
+                            settle_s=sp.settle_s()))
 
     if sp.neck_retract:
         for stub in range(half_gap, 0, -1):
@@ -456,10 +458,12 @@ def split_frames(parent: DropNode, axis: Axis, held: Sequence[DropNode],
                               _bridge(parent, axis, left_root, stub),
                               _bridge(parent, axis, right_root - stub, stub),
                               b.drop()),
+                settle_s=sp.settle_s(),
             ))
         frames.append(Frame(
             label=f"{parent.id} RETRACT done",
             drops=hold + (a.drop(), b.drop()),
+            settle_s=sp.settle_s(),
         ))
 
     step = SplitStep(

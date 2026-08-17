@@ -254,6 +254,28 @@ class SplitParams:
     #: square one, so the cheap and expensive overrides do not look alike.
     stage_stretch_ratios: tuple[tuple[int, float], ...] = ()
 
+    #: EXTRA dwell per frame, in seconds, on top of the controller's step
+    #: delay. 0.0 (the default) is the proven timing and changes nothing.
+    #:
+    #: ADDITIVE, NOT ABSOLUTE, and that is deliberate. The baseline lives on
+    #: `ChipController.step_delay_s`, which a dry run sets to 0 so that a
+    #: plumbing check does not sit through the proven dwell (the fix in
+    #: da70561). An absolute per-stage dwell would override that zero and
+    #: resurrect exactly that bug. As an addend it cannot: the controller only
+    #: sleeps at all when its baseline is nonzero.
+    extra_settle_s: float = 0.0
+
+    #: Per-stage `extra_settle_s` overrides, as (stage_index, seconds) pairs.
+    #: Same shape and same rules as `stage_stretch_ratios`.
+    #:
+    #: SEPARATE FROM THE GEOMETRY OVERRIDE ON PURPOSE. Widening a stage and
+    #: dwelling longer on it are two different hypotheses about why a split
+    #: fails to part -- too little distance, or too little time for the liquid
+    #: to reflow. Keeping them independent is what makes it possible to change
+    #: one and learn something. Setting both at once on the same stage gives a
+    #: result that cannot be attributed.
+    stage_extra_settle_s: tuple[tuple[int, float], ...] = ()
+
     def for_stage(self, stage: int, n_stages: int) -> "SplitParams":
         """The parameters that apply at `stage` of an `n_stages` tree.
 
@@ -268,22 +290,37 @@ class SplitParams:
 
         Out-of-range stage indices RAISE rather than being ignored. Silently
         doing nothing is the wrong failure for this: an override aimed at a
-        stage that does not exist means the caller believes it widened a split
-        it did not, which is precisely the belief that gets a geometry run on a
-        chip under the wrong name.
+        stage that does not exist means the caller believes it widened -- or
+        slowed -- a split it did not, which is precisely the belief that gets a
+        geometry run on a chip under the wrong name.
         """
-        overrides = dict(self.stage_stretch_ratios)
-        out_of_range = sorted(s for s in overrides if not 0 <= s < n_stages)
-        if out_of_range:
-            raise ValueError(
-                f"stage_stretch_ratios targets stage(s) {out_of_range}, but "
-                f"this tree has {n_stages} stage(s), numbered 0 to "
-                f"{n_stages - 1}"
-            )
-        ratio = overrides.get(stage)
-        if ratio is None:
-            return replace(self, stage_stretch_ratios=())
-        return replace(self, stretch_ratio=ratio, stage_stretch_ratios=())
+        ratios = dict(self.stage_stretch_ratios)
+        settles = dict(self.stage_extra_settle_s)
+        for name, mapping in (("stage_stretch_ratios", ratios),
+                              ("stage_extra_settle_s", settles)):
+            bad = sorted(s for s in mapping if not 0 <= s < n_stages)
+            if bad:
+                raise ValueError(
+                    f"{name} targets stage(s) {bad}, but this tree has "
+                    f"{n_stages} stage(s), numbered 0 to {n_stages - 1}"
+                )
+        return replace(
+            self,
+            stretch_ratio=ratios.get(stage, self.stretch_ratio),
+            extra_settle_s=settles.get(stage, self.extra_settle_s),
+            stage_stretch_ratios=(),
+            stage_extra_settle_s=(),
+        )
+
+    def settle_s(self) -> float:
+        """Total intended dwell per frame: the proven baseline plus any extra.
+
+        This is what the PLAN records on each frame, and therefore what
+        `duration_s()` reports. The controller computes the same total from its
+        own baseline and the addend -- see `extra_settle_s` for why the two are
+        kept separate rather than the plan simply dictating the sleep.
+        """
+        return PROVEN_SETTLE_S + self.extra_settle_s
 
     def stretch_to(self, parent_extent: int) -> int:
         """Full-stretch extent. Always even -- see `_round_even`."""

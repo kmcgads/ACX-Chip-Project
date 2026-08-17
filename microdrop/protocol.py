@@ -239,11 +239,21 @@ class SplitSession:
     def split(self) -> None:
         """Drive the tree, pausing at each stage boundary for a look."""
         for stage in range(len(self.plan.axes)):
+            # Resolved from the same `for_stage` the planner used, so the dwell
+            # actually slept and the dwell `plan.duration_s()` reports come from
+            # one source and cannot drift apart.
+            extra = self.sp.for_stage(stage, len(self.plan.axes)).extra_settle_s
+            if extra:
+                self.announce(
+                    f"stage {stage}: dwelling an extra {extra}s per frame "
+                    f"({P.PROVEN_SETTLE_S + extra}s total, against the proven "
+                    f"{P.PROVEN_SETTLE_S}s)")
             steps = [s for s in self.plan.steps if s.stage == stage]
             for step in steps:
                 for f in step.frames:
                     self.chip.activate(list(f.drops), settle=True,
-                                       allow_violations=self.allow_violations)
+                                       allow_violations=self.allow_violations,
+                                       extra_settle_s=extra)
             live = self.plan.stages[stage + 1]
             self._gate(
                 f"Stage {stage} ({self.plan.axes[stage]}-axis) done -- do you "
@@ -376,6 +386,15 @@ def build_parser() -> "argparse.ArgumentParser":
                         "the proven evidence: see "
                         "SplitParams.stage_stretch_ratios. Recorded in the run "
                         "notes.")
+    p.add_argument("--settle-stage", action="append", default=None,
+                   metavar="N:SECONDS", dest="settle_stage",
+                   help="EXTRA dwell per frame for stage N only, on top of the "
+                        f"proven {P.PROVEN_SETTLE_S}s. Repeatable, e.g. "
+                        "--settle-stage 3:0.5 to give that stage 1.0s a frame. "
+                        "Tests whether a split fails to part for want of time "
+                        "rather than want of distance -- the other hypothesis "
+                        "from --stretch-stage, and worth changing one at a "
+                        "time. Recorded in the run notes.")
     p.add_argument("--backend", choices=("auto", "real", "fake"), default="auto",
                    help="'auto' uses the vendor DLL where it can load and a "
                         "fake rig otherwise -- so this is safe off-Windows. "
@@ -468,7 +487,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cfg = ChipConfig()
     stage_ratios = tuple(_stage_ratio(s) for s in (args.stretch_stage or ()))
-    sp = P.SplitParams(stage_stretch_ratios=stage_ratios)
+    stage_settles = tuple(_stage_ratio(s) for s in (args.settle_stage or ()))
+    sp = P.SplitParams(stage_stretch_ratios=stage_ratios,
+                       stage_extra_settle_s=stage_settles)
     row, col = args.at or (SP.SPLIT_ROOT_ROW, SP.SPLIT_ROOT_COL)
     root = SP.DropNode(id="d", parent=None, stage=0, height=20, width=20,
                        row=row, col=col)
@@ -582,6 +603,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         chip=chip, root=root, axes=args.axes, cfg=cfg, sp=sp,
         transport=walk, approach_from=approach_from, confirm=confirm,
         allow_violations=args.allow_clearance_violations)
+    if stage_settles:
+        detail = ", ".join(f"stage {s} at +{v}s ({P.PROVEN_SETTLE_S + v}s total)"
+                           for s, v in sorted(stage_settles))
+        session.notes.append(
+            f"--settle-stage: {detail}. Every other stage keeps the proven "
+            f"{P.PROVEN_SETTLE_S}s. Timing off the proven dwell is not proven "
+            f"timing.")
     if stage_ratios:
         # Same reasoning as the step-delay note below: a run whose stages were
         # stretched off the proven ratio must not later be read as one that

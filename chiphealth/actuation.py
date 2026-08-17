@@ -503,7 +503,8 @@ class ChipController:
     # ── actuation ────────────────────────────────────────────────────────────
 
     def activate(self, drops: Sequence[Drop], settle: bool = True,
-                 allow_violations: bool | None = None) -> int:
+                 allow_violations: bool | None = None,
+                 extra_settle_s: float = 0.0) -> int:
         """Send one electrode frame. The whole frame, every time.
 
         Wraps ``ActivateElec(rows, cols, count, Drop*)``. There is no
@@ -552,8 +553,13 @@ class ChipController:
                          self.rows, self.cols, len(drops),
                          [(d.height, d.width, d.row, d.col) for d in drops], rc)
 
+        # `extra_settle_s` is an ADDEND, and the `> 0` guard is on the baseline
+        # alone. A dry run sets step_delay_s to 0 precisely so a plumbing check
+        # does not sit through the proven dwell (da70561); an extra that could
+        # fire against a zero baseline would resurrect that. So an unarmed run
+        # stays instant no matter what any stage asks for.
         if settle and self.step_delay_s > 0:
-            self._sleep(self.step_delay_s)
+            self._sleep(self.step_delay_s + max(0.0, extra_settle_s))
         return rc
 
     def _record_rc(self, call: str, rc: int) -> None:
