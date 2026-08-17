@@ -581,6 +581,10 @@ def plan_tree(root: DropNode, axes: Sequence[Axis] = DEFAULT_AXES,
                 ))
 
     for stage, axis in enumerate(axes):
+        # Identity unless `sp.final_stretch_ratio` is set, in which case the
+        # last stage gets a different ratio and every earlier stage keeps the
+        # proven one. See SplitParams.for_stage.
+        sp_stage = sp.for_stage(stage, len(axes))
         parents = sorted((plan.nodes[i] for i in live),
                          key=lambda n: (n.row, n.col))
         # Parents of this stage that have not been split yet. A parent leaves
@@ -592,7 +596,7 @@ def plan_tree(root: DropNode, axes: Sequence[Axis] = DEFAULT_AXES,
             pending.remove(parent.id)
             others = [plan.nodes[i] for i in pending] + \
                      [plan.nodes[i] for i in next_live]
-            step, (a, b) = split_frames(parent, axis, others, sp)
+            step, (a, b) = split_frames(parent, axis, others, sp_stage)
 
             boxes = {n.id: n.bounds() for n in others}
             boxes[f"{parent.id}*stretched"] = _stretched(

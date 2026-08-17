@@ -998,5 +998,97 @@ class TestPhysicalUnits(unittest.TestCase):
         self.assertFalse(hasattr(DropNode, "volume_nl"))
 
 
+class TestFinalStageStretch(unittest.TestCase):
+    """`SplitParams.final_stretch_ratio`: widen the LAST stage only.
+
+    Added 2026-08-17 after a live 8-piece run failed to fully separate at the
+    4->8 stage. Separation is not a settable margin -- `neck_gap` is
+    `stretch_to(e) - e` -- so the only lever is stretching the parent further
+    before eroding, and it is restricted to the last stage so that stages
+    proven on hardware keep their proven numbers.
+    """
+
+    def test_default_is_off_and_changes_nothing(self):
+        """The whole feature must be invisible unless asked for."""
+        self.assertIsNone(P.DEFAULT.final_stretch_ratio)
+        base = plan_tree(SP.split_root(), ("W", "H", "W"))
+        same = plan_tree(SP.split_root(), ("W", "H", "W"), P.SplitParams())
+        self.assertEqual(base.n_frames, same.n_frames)
+        self.assertEqual([n.bounds() for n in base.leaves],
+                         [n.bounds() for n in same.leaves])
+
+    def test_for_stage_substitutes_only_the_last_stage(self):
+        sp = P.SplitParams(final_stretch_ratio=2.2)
+        self.assertEqual(sp.for_stage(0, 3).stretch_ratio, P.STRETCH_RATIO)
+        self.assertEqual(sp.for_stage(1, 3).stretch_ratio, P.STRETCH_RATIO)
+        self.assertEqual(sp.for_stage(2, 3).stretch_ratio, 2.2)
+
+    def test_for_stage_is_idempotent(self):
+        """The substituted copy is a plain single-ratio parameter set, so a
+        second application cannot substitute again."""
+        sp = P.SplitParams(final_stretch_ratio=2.2).for_stage(2, 3)
+        self.assertIsNone(sp.final_stretch_ratio)
+        self.assertEqual(sp.for_stage(2, 3).stretch_ratio, 2.2)
+
+    def test_earlier_stages_are_untouched_frame_for_frame(self):
+        """The point of the whole exercise: stages that worked stay proven."""
+        base = plan_tree(SP.split_root(), ("W", "H", "W"))
+        wide = plan_tree(SP.split_root(), ("W", "H", "W"),
+                         P.SplitParams(final_stretch_ratio=2.2))
+        for stage in (0, 1):
+            b = [s for s in base.steps if s.stage == stage]
+            w = [s for s in wide.steps if s.stage == stage]
+            self.assertEqual([s.neck_gap for s in b], [s.neck_gap for s in w])
+            self.assertEqual([s.stretch_to for s in b], [s.stretch_to for s in w])
+            self.assertEqual([f.label for s in b for f in s.frames],
+                             [f.label for s in w for f in s.frames])
+
+    def test_the_last_stage_gap_opens_from_8_to_12(self):
+        wide = plan_tree(SP.split_root(), ("W", "H", "W"),
+                         P.SplitParams(final_stretch_ratio=2.2))
+        last = [s for s in wide.steps if s.stage == 2]
+        self.assertEqual({s.neck_gap for s in last}, {12})
+        self.assertEqual({s.stretch_to for s in last}, {22})
+        self.assertEqual(wide.n_frames, 103)          # was 87
+
+    def test_widening_still_halves_evenly_and_clears(self):
+        """Bought separation must not cost symmetry or fit."""
+        wide = plan_tree(SP.split_root(), ("W", "H", "W"),
+                         P.SplitParams(final_stretch_ratio=2.2))
+        self.assertEqual(wide.violations, [])
+        self.assertEqual({(n.height, n.width) for n in wide.leaves}, {(10, 5)})
+        eq = SP.volume_equality(wide)
+        self.assertTrue(eq.equal)
+        self.assertEqual(eq.area_electrodes, 50)
+
+    def test_siblings_gain_separation_and_neighbours_lose_it(self):
+        """The trade-off that picked 2.2 over 2.4, pinned so it stays visible.
+
+        Widening pushes each child outwards -- towards the NEIGHBOURING
+        group's child. Sibling separation and non-sibling separation move in
+        opposite directions, so 'more separation' is only true of the pair
+        being split.
+        """
+        def seps(ratio):
+            sp = P.SplitParams(final_stretch_ratio=ratio) if ratio else P.DEFAULT
+            plan = plan_tree(SP.split_root(), ("W", "H", "W"), sp)
+            sib, non = [], []
+            for a, b in itertools.combinations(plan.leaves, 2):
+                s = SP._separation(a.bounds(), b.bounds())
+                (sib if a.id[:-1] == b.id[:-1] else non).append(s)
+            return min(sib), min(non)
+
+        self.assertEqual(seps(None), (8, 8))
+        self.assertEqual(seps(2.2), (12, 4))
+        # 2.4 is planable but leaves two settled pieces at the clearance floor.
+        self.assertEqual(seps(2.4), (14, 2))
+
+    def test_it_does_not_leak_into_the_16_piece_tree(self):
+        """run_16piece_split.py passes no override, so WHWH is unaffected."""
+        plan = plan_tree(SP.split_root(), ("W", "H", "W", "H"))
+        self.assertEqual(plan.n_frames, 159)
+        self.assertEqual({s.neck_gap for s in plan.steps if s.stage == 3}, {8})
+
+
 if __name__ == "__main__":
     unittest.main()

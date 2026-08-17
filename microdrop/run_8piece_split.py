@@ -1,24 +1,79 @@
 """
 run_8piece_split.py
 ───────────────────
-VERIFIED 8-PIECE SPLIT — 2026-08-13
+8-PIECE SPLIT — WIDENED FINAL STAGE, NOT YET CONFIRMED ON HARDWARE
 
-The known-good configuration, live-tested on chip trial01 and confirmed
-holding. Tagged in git as `split-8piece-verified`. This script exists so that
-run can be reproduced exactly, by name, without remembering flags — and so it
-stays reproducible after work starts on 16 and 32 pieces.
+⚠ THE "VERIFIED" LABEL HAS BEEN PULLED. It is not re-applied until a live run
+confirms the 4->8 stage separates completely. Tests passing is not that.
+
+WHY IT WAS PULLED — 2026-08-17
+──────────────────────────────
+A live run of the previously-verified configuration did NOT fully separate at
+the last stage: the four 10x10 parents stretched and eroded, but the pieces
+did not come completely apart. That contradicts the 2026-08-13 run this file
+was built to reproduce, and the git tag `split-8piece-verified` should be read
+with that in mind -- it records what was believed on that date, and the belief
+did not survive contact with the chip a second time.
+
+READ THE NEXT PARAGRAPH BEFORE TRUSTING THE FIX BELOW.
+
+THE GEOMETRY WAS IDENTICAL ACROSS BOTH RUNS. Same script, same hardcoded
+numbers, same plan, frame for frame. So whatever differed between a working
+4->8 and a failing one, IT WAS NOT THE GEOMETRY. Widening the final stage, as
+this file now does, does not address a root cause -- it buys margin against a
+cause that has not been identified. Candidates that geometry cannot fix, and
+that no dry run can rule out: droplet volume at load, filler oil, chip surface
+state or residue from a prior run, actual rail voltage under load, dwell at
+the smallest pieces, plate gap. If the widened stage also fails, the answer is
+in that list and not in a larger number here.
+
+WHAT CHANGED, AND ONLY THIS
+───────────────────────────
+The LAST stage (4->8) now stretches its 10-electrode parents to 22 instead of
+18, opening the neck gap from 8 to 12 -- the two children of each split end up
+12 electrodes apart instead of 8. Stages 0 and 1 are untouched, frame for
+frame, because they worked: both still stretch 20 -> 36 at the proven 1.75
+ratio over 17 frames.
+
+Separation is not a margin that can be set. `SplitParams.neck_gap` is
+`stretch_to(extent) - extent`, so the only lever on how far apart two children
+land is how far their parent was stretched first. Widening therefore means
+leaving the one number in `params.py` that came whole from a working script
+(`STRETCH_RATIO = 1.75`, csvvolcont L230-235). At the last stage this file now
+uses 2.2, which is off that evidence: it asks the same liquid to follow a
+longer pad. That is the intended mechanism -- a thinner neck breaks more
+readily -- but it is also how you get a satellite in the middle instead of a
+clean break, and nothing here knows where that limit is.
+
+WHY 2.2 AND NOT MORE. Widening pushes each child outwards, towards the
+NEIGHBOURING group's child, so sibling separation and non-sibling separation
+move in opposite directions. Measured at the fixed split position:
+
+    ratio    sibling sep    nearest non-sibling    tree frames   violations
+    1.75              8                      8             87            0
+    2.2              12                      4            103            0
+    2.4              14                      2            111            0
+    2.6              16                      0            119            6
+
+2.4 is available and puts the siblings 14 apart, but it leaves two settled
+pieces from different groups only 2 electrodes apart, which is the planner's
+own floor and a merge risk in the other direction. 2.6 collides outright.
+2.2 is the largest step that keeps everything comfortable; going further needs
+the four groups spread out first, which would mean changing the earlier stages
+that already work.
 
 Every parameter below is HARDCODED. There is no flag to change the position,
 the axis order or the piece count, and that is the point: the moment this
-script can be pointed at a different geometry it stops being the record of
-what was verified.
+script can be pointed at a different geometry it stops being a record of
+anything.
 
 Each run:
   1. Connect, power up, and verify the 45V rails read back
   2. Energise a 20x20 hold at row 5, col 55 and wait for the operator to load
   3. Walk the droplet 50 electrodes down column 55 to row 55, col 55
   4. Split W -> H -> W into 8 pieces of 10x5, pausing for a piece count
-     after each stage
+     after each stage. The last stage is the widened one -- that is the gate
+     to look hardest at
   5. Print what the run claims and what it did not verify
 
 NOTE — no camera, and what that costs
@@ -76,24 +131,32 @@ from microdrop import params as P
 from microdrop import splitplan as SP
 from microdrop.protocol import OperatorAbort, SplitSession
 
-# ── The verified configuration ────────────────────────────────────────────────
-# These are the numbers that were live-tested. They are written out rather than
-# read from splitplan's defaults on purpose: if a later change moves
-# `split_root` or `DEFAULT_AXES` for 16- or 32-piece work, this script must
-# keep doing what it says on the tin, or refuse. See check_geometry().
+# ── The configuration ─────────────────────────────────────────────────────────
+# Load, walk and split positions are the live-tested ones and are unchanged.
+# The final-stage stretch is not -- see the header. Written out rather than read
+# from splitplan's defaults on purpose: if a later change moves `split_root` or
+# `DEFAULT_AXES` for 16- or 32-piece work, this script must keep doing what it
+# says on the tin, or refuse. See check_geometry().
 
 LOAD_ROW, LOAD_COL = 5, 55      # where the operator loads the droplet
 SPLIT_ROW, SPLIT_COL = 55, 55   # where the tree runs
 DROPLET_H, DROPLET_W = 20, 20   # the starting droplet
 AXES = ("W", "H", "W")          # 3 stages -> 8 pieces
 
+# Applies to the LAST stage only; stages 0 and 1 keep the proven 1.75. This is
+# the single number that changed on 2026-08-17 and the only reason this file no
+# longer says "verified". See SplitParams.final_stretch_ratio.
+FINAL_STRETCH_RATIO = 2.2
+
 # What the above must produce. A mismatch means the planner changed under this
-# script, and it stops rather than running an unverified geometry.
+# script, and it stops rather than running a geometry nobody has looked at.
 EXPECT_PIECES = 8
 EXPECT_LEAF = (10, 5)           # electrodes; 2.465 x 1.232 mm at the 246.48um pitch
 EXPECT_WALK_ELECTRODES = 50
 EXPECT_APPROACH_FRAMES = 100
-EXPECT_TREE_FRAMES = 87
+EXPECT_TREE_FRAMES = 103        # was 87 at the proven ratio; 4 splits x 4 frames
+EXPECT_FINAL_GAP = 12           # was 8. THE CHANGE. Pinned so it cannot drift
+EXPECT_EARLY_GAP = 16           # stages 0-1, unchanged and must stay unchanged
 
 STEP_DELAY_S = P.PROVEN_SETTLE_S    # 0.5s, csvvolcont.py:137
 BAR = "=" * 68
@@ -138,7 +201,7 @@ def confirm(question: str, detail: str = "") -> bool:
 
 
 def check_geometry(session: SplitSession) -> SP.Approach:
-    """Refuse to run if the planner no longer produces the verified geometry.
+    """Refuse to run if the planner no longer produces the expected geometry.
 
     The whole value of this script is being the record of a run that worked on
     hardware. If `splitplan` changes -- a different stretch ratio, a different
@@ -176,6 +239,21 @@ def check_geometry(session: SplitSession) -> SP.Approach:
         problems.append(f"leaf sizes {sorted(leaves)}, expected {EXPECT_LEAF}")
     if plan.n_frames != EXPECT_TREE_FRAMES:
         problems.append(f"{plan.n_frames} tree frames, expected {EXPECT_TREE_FRAMES}")
+
+    # The two halves of the 2026-08-17 change, pinned separately so neither can
+    # drift into the other. The final gap is what was widened; the early gap is
+    # what must NOT have been, because those stages worked on hardware and the
+    # whole point of a per-stage ratio is leaving them alone.
+    last = len(AXES) - 1
+    final_gaps = {s.neck_gap for s in plan.steps if s.stage == last}
+    early_gaps = {s.neck_gap for s in plan.steps if s.stage < last}
+    if final_gaps != {EXPECT_FINAL_GAP}:
+        problems.append(f"final-stage neck gap {sorted(final_gaps)}, "
+                        f"expected {EXPECT_FINAL_GAP}")
+    if early_gaps != {EXPECT_EARLY_GAP}:
+        problems.append(f"early-stage neck gap {sorted(early_gaps)}, expected "
+                        f"{EXPECT_EARLY_GAP} -- the widening must apply to the "
+                        f"LAST stage only; stages 0-1 are hardware-proven")
     if approach.electrodes != EXPECT_WALK_ELECTRODES:
         problems.append(f"walk is {approach.electrodes} electrodes, "
                         f"expected {EXPECT_WALK_ELECTRODES}")
@@ -187,11 +265,15 @@ def check_geometry(session: SplitSession) -> SP.Approach:
 
     if problems:
         raise SystemExit(
-            "\n  REFUSING TO RUN: this is no longer the verified geometry.\n"
+            "\n  REFUSING TO RUN: this is no longer the geometry this script\n"
+            "  was written for.\n"
             + "".join(f"    - {p}\n" for p in problems)
-            + "\n  microdrop/splitplan.py has changed since 2026-08-13. Either\n"
-              "  restore it, or re-verify on hardware and update the EXPECT_*\n"
-              "  constants at the top of this file to match what you verified.\n")
+            + "\n  microdrop/splitplan.py or params.py has changed since\n"
+              "  2026-08-17. Either restore it, or re-check with\n"
+              "  `python -m microdrop.protocol --plan-only --final-stretch "
+              f"{FINAL_STRETCH_RATIO}`\n"
+              "  and update the EXPECT_* constants at the top of this file to\n"
+              "  match what you checked.\n")
 
     return approach
 
@@ -200,7 +282,8 @@ def check_geometry(session: SplitSession) -> SP.Approach:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Run the verified 8-piece split. ALWAYS ARMED: running "
+        description="Run the 8-piece split with the widened final stage. NOT "
+                    "yet confirmed on hardware. ALWAYS ARMED: running "
                     "this script energises the chip. There is no dry run -- "
                     "use `python -m microdrop.protocol --plan-only` for a "
                     "check that touches no hardware.")
@@ -209,7 +292,7 @@ def main() -> int:
     ap.add_argument("--arm", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
-    banner("VERIFIED 8-PIECE SPLIT — 2026-08-13")
+    banner("8-PIECE SPLIT — WIDENED FINAL STAGE, NOT CONFIRMED ON HARDWARE")
     if args.arm:
         say("Note", "--arm is accepted but no longer needed; this script is "
                     "always armed.")
@@ -218,6 +301,9 @@ def main() -> int:
           f" to row {SPLIT_ROW}, col {SPLIT_COL}")
     print(f"  split    {' -> '.join(AXES)}  ->  {EXPECT_PIECES} pieces of "
           f"{EXPECT_LEAF[0]}x{EXPECT_LEAF[1]}")
+    print(f"  change   final stage stretches at {FINAL_STRETCH_RATIO} "
+          f"(not {P.STRETCH_RATIO}); neck gap 8 -> {EXPECT_FINAL_GAP}. "
+          f"Stages 0-1 unchanged")
     print(f"  mode     ARMED — the rails come up on connect and electrodes "
           f"will be energised")
 
@@ -260,6 +346,7 @@ def main() -> int:
                          row=SPLIT_ROW, col=SPLIT_COL),
         axes=AXES,
         cfg=cfg,
+        sp=P.SplitParams(final_stretch_ratio=FINAL_STRETCH_RATIO),
         transport=True,
         approach_from=SP.DropNode(id="d", parent=None, stage=0,
                                   height=DROPLET_H, width=DROPLET_W,
@@ -268,6 +355,13 @@ def main() -> int:
         announce=lambda m: say("Split", m),
     )
     approach = check_geometry(session)
+    session.notes.append(
+        f"FINAL STAGE WIDENED, NOT HARDWARE-VERIFIED: the last stage stretched "
+        f"at {FINAL_STRETCH_RATIO} instead of the proven {P.STRETCH_RATIO}, "
+        f"opening the neck gap from 8 to {EXPECT_FINAL_GAP} electrodes. Stages "
+        f"0-1 are unchanged. This geometry had never been on a chip as of "
+        f"2026-08-17, and it was reached by adding margin, not by identifying "
+        f"why the proven geometry failed on a second run.")
 
     total = 1 + approach.n_frames + session.plan.n_frames
     say("Plan", f"{total} frames, ~{approach.duration_s() + session.plan.duration_s():.0f}s "

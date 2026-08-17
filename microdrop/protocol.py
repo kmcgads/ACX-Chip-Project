@@ -352,6 +352,15 @@ def build_parser() -> "argparse.ArgumentParser":
                    help="Split axis order, W/H per stage. Default WHW = 8 "
                         "pieces of 10x5. WHWH = 16 of 5x5, which the default "
                         "position has room for. (default: %(default)s)")
+    p.add_argument("--final-stretch", type=float, default=None, metavar="RATIO",
+                   help="Stretch ratio for the LAST stage only; every earlier "
+                        f"stage keeps the proven {P.STRETCH_RATIO}. Raising it "
+                        "is the ONLY way to put the two children of a split "
+                        "further apart -- the neck gap is stretch_to(e) - e, "
+                        "so there is no separation margin to widen directly. "
+                        "Off the proven evidence: see "
+                        "SplitParams.final_stretch_ratio. Recorded in the run "
+                        "notes.")
     p.add_argument("--backend", choices=("auto", "real", "fake"), default="auto",
                    help="'auto' uses the vendor DLL where it can load and a "
                         "fake rig otherwise -- so this is safe off-Windows. "
@@ -443,6 +452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     cfg = ChipConfig()
+    sp = P.SplitParams(final_stretch_ratio=args.final_stretch)
     row, col = args.at or (SP.SPLIT_ROOT_ROW, SP.SPLIT_ROOT_COL)
     root = SP.DropNode(id="d", parent=None, stage=0, height=20, width=20,
                        row=row, col=col)
@@ -454,7 +464,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # ── plan-only: no USB handle, no backend, nothing energised ──────────────
     if args.plan_only:
-        plan = SP.plan_tree(root, args.axes, cfg=cfg)
+        plan = SP.plan_tree(root, args.axes, sp, cfg=cfg)
         try:
             SP.require_clearance(plan, cfg, args.allow_clearance_violations)
             verdict = "CLEARANCE OK"
@@ -553,9 +563,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     confirm = (lambda q, detail="": True) if args.yes else console_confirm
     session = SplitSession(
-        chip=chip, root=root, axes=args.axes, cfg=cfg,
+        chip=chip, root=root, axes=args.axes, cfg=cfg, sp=sp,
         transport=walk, approach_from=approach_from, confirm=confirm,
         allow_violations=args.allow_clearance_violations)
+    if args.final_stretch is not None:
+        # Same reasoning as the step-delay note below: a run whose last stage
+        # was stretched off the proven ratio must not later be read as one that
+        # used the proven geometry.
+        session.notes.append(
+            f"--final-stretch {args.final_stretch}: the LAST stage stretched "
+            f"at {args.final_stretch} instead of the proven "
+            f"{P.STRETCH_RATIO}. Earlier stages are unaffected. This is off "
+            f"the csvvolcont evidence and is not a proven geometry.")
     if args.yes:
         session.notes.append(
             "--yes: every operator gate was auto-answered. Nobody looked down "

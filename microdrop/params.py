@@ -94,7 +94,7 @@ literal from the file.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # ── PROVEN: the split sequence, csvvolcont.split_and_move (L206-302) ──────────
 
@@ -211,6 +211,45 @@ class SplitParams:
     # file says which, and a plan for 8 pieces would repeat it 7 times.
     # Defaulted off so it is a decision, not an inheritance.
     neck_retract: bool = False
+
+    #: Stretch ratio for the LAST stage of a tree only. None (the default)
+    #: means every stage uses `stretch_ratio`, which is the proven 1.75 and is
+    #: exactly the behaviour this class had before this field existed.
+    #:
+    #: WHY THIS EXISTS. Separation is not a free parameter -- see `neck_gap`,
+    #: which is `stretch_to(e) - e` and therefore fully determined by the ratio
+    #: and the parent extent. There is no margin to widen. The only way to put
+    #: the two children further apart is to stretch the parent further before
+    #: eroding, and this field is that lever, restricted to the last stage so
+    #: that earlier stages proven on hardware keep their proven numbers.
+    #:
+    #: THE COST, STATED PLAINLY. `stretch_ratio` 1.75 is the one number here
+    #: inherited whole from a script that works (csvvolcont L230-235). Any
+    #: value in this field is off that evidence: it asks a fixed volume of
+    #: liquid to follow a longer pad, which thins the film further than
+    #: anything proven. That is the intended mechanism -- a thinner neck breaks
+    #: more readily -- but past some ratio the contact line depins, or the
+    #: middle dewets and leaves a satellite instead of a clean break. Nothing
+    #: here knows where that limit is. It is a hardware question.
+    final_stretch_ratio: float | None = None
+
+    def for_stage(self, stage: int, n_stages: int) -> "SplitParams":
+        """The parameters that apply at `stage` of an `n_stages` tree.
+
+        Identity for every stage unless `final_stretch_ratio` is set, in which
+        case the last stage -- and only the last stage -- gets it. Returning a
+        substituted copy rather than branching inside `split_frames` keeps the
+        stage rule in one place, and keeps `split_frames` a function of the
+        parameters it is handed.
+
+        The copy clears `final_stretch_ratio`, so the result is a plain
+        single-ratio parameter set. Applying `for_stage` to it again is a
+        no-op rather than a second substitution.
+        """
+        if self.final_stretch_ratio is None or stage != n_stages - 1:
+            return self
+        return replace(self, stretch_ratio=self.final_stretch_ratio,
+                       final_stretch_ratio=None)
 
     def stretch_to(self, parent_extent: int) -> int:
         """Full-stretch extent. Always even -- see `_round_even`."""
