@@ -1,7 +1,17 @@
 # Priority 1 — Electrode actuation visualization + chip health check
 
-**Design document. No code written.** Approved to design 2026-08-06; implementation gated on a
-further explicit go-ahead.
+**Design document — ✅ IMPLEMENTED.** Approved to design 2026-08-06, approved to build, and built
+from 2026-08-07. Status refreshed 2026-08-18; the header previously still read "No code written",
+which stopped being true on 2026-08-07.
+
+What is described below exists as `chiphealth/` (10 modules) plus `rescore.py` — 5,157 lines,
+379 tests. Read this document for *why* the method is what it is; read
+[`p1_build_status.md`](p1_build_status.md) for what the code currently does, what changed since,
+and the hardware sessions. Where the two disagree, `p1_build_status.md` is the newer record.
+
+**Built, but not validated on the chip.** No armed run has ever passed the voltage gate, so
+nothing here has been confirmed against real liquid. §11's caveats about the method are still
+entirely open questions, not settled ones.
 
 Governed by `docs/spec/objectives.md` §0 (standing requirements), §1 (Priority 1), and the vendor-DLL
 findings in `workspace/analysis.md`. Architecture context in `docs/spec/design.md`.
@@ -449,4 +459,16 @@ automatic degradation learning (§1.6) · the shim (`design.md` §9 q1).
 
 ## 13. Status
 
-Design only. **No code written.** Awaiting explicit approval to implement.
+**Implemented 2026-08-07 onwards; awaiting a valid armed run.** Updated 2026-08-18 — this section
+read "Design only. No code written." until then.
+
+| | |
+|---|---|
+| Code | `chiphealth/` (10 modules) + `rescore.py`, 5,157 lines |
+| Tests | 379, all passing (2 skipped — the OpenCV picker fallback) |
+| Validated against the synthetic rig | ✅ re-run 2026-08-18, reproduces exactly |
+| Validated on hardware | ❌ **never** — no armed run has passed the voltage gate |
+| Last run of any kind | 2026-08-12 |
+
+Current state, the blocker, and the procedure for the next armed run are in
+[`p1_build_status.md`](p1_build_status.md), which supersedes this section.

@@ -1,9 +1,17 @@
 # Acxchip — requirements
 
-**Written 2026-08-12.** This file was an unfilled template until now; the requirements below were
-already established and enforced in code and tests, just never collected in one place. Every item
-cites where it comes from. Nothing here is new — if an item is not traceable to `objectives.md`,
-`p1_chip_health_design.md`, `workspace/analysis.md`, or a test, it does not belong here.
+**Written 2026-08-12. Reviewed 2026-08-18.** This file was an unfilled template until then; the
+requirements below were already established and enforced in code and tests, just never collected
+in one place. Every item cites where it comes from. Nothing here is new — if an item is not
+traceable to `objectives.md`, `p1_chip_health_design.md`, `workspace/analysis.md`, or a test, it
+does not belong here.
+
+> **Scope: Priority 1 only.** Everything below is the chip-health tool. `microdrop/` was built
+> after this file and has **no requirements recorded anywhere** — its constraints (50/50 division,
+> per-frame mirror symmetry, per-stage rather than per-piece overrides, no vision stack, PROVEN vs
+> DERIVED provenance) live only in module docstrings, `docs/guides/`, and the tests that enforce
+> them. Writing them up would mean deriving them from that existing material, which this file's own
+> rule permits; it has not been done.
 
 ## Problem
 
@@ -72,8 +80,11 @@ behaviour changed.
 - [x] **Structured logging to file.** No bare `print()` as the only output (§0.1).
 - [x] **Runs are resumable and partial.** Full-chip coverage in one sitting is not realistic with
       manual droplet loading; coverage accumulates across runs (§1.4).
-- [ ] **Tests must not depend on the ambient environment.** Currently violated by two tests that
-      assert OpenCV is absent — see `p1_build_status.md`.
+- [ ] **Tests must not depend on the ambient environment.** Two tests assert the no-OpenCV
+      fallback. As of 2026-08-18 they are `skipIf`-guarded rather than failing, so the suite is
+      green on any machine — but that suppresses the dependency rather than removing it: the
+      fallback is now unexercised wherever OpenCV is installed. Still open until the import is
+      mocked. See `p1_build_status.md`.
 
 ## Out of scope
 

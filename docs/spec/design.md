@@ -1,6 +1,6 @@
 # Acxchip — design
 
-**Status:** partially realised. **Amended 2026-08-12.**
+**Status:** partially realised. **Amended 2026-08-12; inventory refreshed 2026-08-18.**
 **Scope:** a layered Python API over the ACX/Sigenex AM-DMF instrument, replacing the
 flat script collection in `project/` with a tested library.
 **Evidence base:** `workspace/analysis.md` §1–§29 (static analysis of the vendor bundle).
@@ -8,10 +8,20 @@ flat script collection in `project/` with a tested library.
 > **⚠ What has actually been built, and where this document is now aspirational.**
 >
 > This was written before any code existed and describes a full five-subsystem layered API
-> (`l0_transport` / `l1_primitives` / `l2_subsystems` / `l3` / `l4`). What exists is the **chip
-> health package** — `chiphealth/` plus `rescore.py`, ~4000 lines, 285 tests. It is deliberately
-> flatter than the layering below; see `p1_chip_health_design.md` §11 for why, and note that the
-> reconciliation described there now has no scheduled trigger.
+> (`l0_transport` / `l1_primitives` / `l2_subsystems` / `l3` / `l4`). What exists is two flat
+> packages, not five layers:
+>
+> | Package | Lines | Tests | Corresponds to |
+> |---|---|---|---|
+> | `chiphealth/` + `rescore.py` | 5,157 | 379 | Priority 1 |
+> | `microdrop/` | 2,747 | 141 | Priority 2 (partly — see `objectives.md` §2) |
+>
+> Both are deliberately flatter than the layering below; see `p1_chip_health_design.md` §11 for
+> why, and note that the reconciliation described there now has no scheduled trigger.
+>
+> `microdrop/` is not described anywhere in this document — it was built after it. The layered API
+> did not merely go unrealised; a second package has now been added outside it, which is worth
+> knowing before treating the structure below as the plan of record.
 >
 > Where this document and `objectives.md` disagree, **`objectives.md` wins** — that is the rule
 > stated in its header, and the §5 deltas listed there have now been applied here.

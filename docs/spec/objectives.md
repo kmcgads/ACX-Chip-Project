@@ -1,8 +1,10 @@
 # Acxchip — objectives and prioritized roadmap
 
-**Status:** Priority 1 is **built** and awaiting its first valid armed run; Priority 2 (droplet
-size) is not started. Authored 2026-08-06 from researcher-stated priorities. See §6 for what is
-and is not done.
+**Status:** Priority 1 is **built** and still awaiting its first valid armed run. Priority 2 is
+**no longer "not started"** — `microdrop/` was built 2026-08-13 to 2026-08-17 and has run on
+hardware, though it addresses *equal* splitting rather than the *minimum-size* goal §2 states, and
+§2.4 q1 remains unanswered. Authored 2026-08-06 from researcher-stated priorities; status refreshed
+2026-08-18. See §6 for what is and is not done.
 
 > **⚠ RENUMBERED 2026-08-12.** The original Priority 2 — axis movement via `MCDLL_NET.dll` — has
 > been **dropped as an active priority** by researcher decision. Minimum-size droplet splitting,
@@ -361,6 +363,39 @@ scripts achieve.
 
 Starts only after Priority 1 is approved *and* built.
 
+> **⚠ WHAT WAS ACTUALLY BUILT IS ADJACENT TO THIS GOAL — recorded 2026-08-18.** `microdrop/` exists
+> (5 modules, 2,747 lines, 141 tests) and its `__init__.py` names itself "Priority 2". It does
+> **symmetric** splitting: halve a droplet into 2ⁿ pieces of provably equal footprint, with the
+> neck *walked apart rather than snapped* — the `csvvolcont.py` mechanic, explicitly not
+> `1pixsplit.py`'s (`basics/README.md`, researcher 2026-08-13). That is a different deliverable
+> from "as small as possible": it optimises **equality**, which §2 never asked for, and does not
+> by itself optimise **size**, which §2 did.
+>
+> **But the planner is not the constraint, and this is worth knowing before §2 is scoped.**
+> Measured 2026-08-18 by calling `plan_tree` directly:
+>
+> | Root | Axes | Result |
+> |---|---|---|
+> | 20×20 | `WHWH` | 16 pieces of 5×5 — four halvings, all divisibility allows |
+> | 16×16 | `WHWHWHWH` | **256 pieces of 1×1** |
+> | 8×8 | `WHWHWH` | 64 pieces of 1×1 |
+>
+> The 5×5 floor is a consequence of **20 = 2²×5**, not of the algorithm. From a power-of-two
+> parent the existing planner already reaches the 1×1 target in §2.1's table. Two caveats, both
+> load-bearing: `protocol.py:494` **hardcodes the root at 20×20**, so no CLI flag can currently
+> ask for this; and a plan is geometry, not a result — the 8-piece tree at 10×5 does not reliably
+> separate on hardware (see *Not done* in §6), so 256 pieces of 1×1 is a planner output and
+> nothing more.
+>
+> **§2.4 q1 is still the gate**, and it is now overdue rather than merely open: nobody has decided
+> whether the deliverable is a minimum-size droplet or 1-electrode positioning precision, and
+> `microdrop/` was built without answering it. The measurement in q4 matters here too — a 1×1
+> droplet is ~7 px across, so "we planned it" and "we can show we achieved it" are separated by
+> the optical-resolution question.
+>
+> It also started while Priority 1 was still blocked, contrary to the gate stated just above and in
+> §4. Recorded as what happened, not endorsed as the sequence.
+
 > **Dependency corrected 2026-08-12.** This previously read "after Priorities 1 and 2". The
 > dependency on the axis work was **never justified anywhere in this document** — §2.1 below
 > argues only the Priority 1 dependency, which is real. Droplet splitting is electrode actuation
@@ -507,7 +542,10 @@ The deferred axis work (Appendix A) also lands here if it is ever reopened.
           │
           ▼
   P2  minimum-size droplet splitting  (was P3)
-      gate: ask before designing ──▶ ... (same shape).  NOT STARTED.
+      gate: ask before designing ──▶ ... (same shape).
+      ⚠ PARTLY BUILT 2026-08-13..17 as microdrop/ — symmetric splitting, not
+        minimum-size, and begun while P1 was still blocked. See the box in §2.
+        §2.4 q1 (what the deliverable is) never answered.
           │
           ▼
   P3  everything else (was P4)
@@ -553,14 +591,19 @@ that file. Kept here as the record of what changed and why.
 
 ## 6. Status — what is and is not done
 
-**Updated 2026-08-12.** This section previously read "No code written"; that has been true of
+**Updated 2026-08-18.** This section previously read "No code written"; that has been true of
 nothing since 2026-08-07.
 
 ### Done
 
-- **Priority 1 is built.** Nine modules under `chiphealth/` plus `rescore.py` for offline
-  re-scoring. **285 tests, 283 passing** — the 2 failures are environment-dependent (they assert
-  OpenCV is absent while it is installed). Detail in `docs/spec/p1_build_status.md`.
+- **Priority 1 is built.** Ten modules under `chiphealth/` plus `rescore.py` for offline
+  re-scoring. Detail in `docs/spec/p1_build_status.md`.
+- **Priority 2 is partly built** — `microdrop/`, 5 modules, symmetric splitting. See the box in
+  §2 for why "partly" is doing real work in that sentence, and the caveat under *Not done* below.
+- **The suite is 520 tests, 518 passing and 2 skipped** (`test_splitplan.py` 86,
+  `test_protocol.py` 55, the remaining 379 across `chiphealth/`). The 2 skips are the OpenCV
+  picker tests, now `skipIf`-guarded rather than failing — green everywhere, and unexercised
+  anywhere OpenCV is installed.
 - All §1.4 questions answered 2026-08-06.
 - The held-open camera change (§0.2) — implemented as part of the P1 build, as scheduled.
 - Autofocus off, recorded per run (§0.2).
@@ -573,14 +616,27 @@ nothing since 2026-08-07.
 - **No valid armed run yet.** Sixteen armed attempts on 2026-08-10; every one that recorded a
   voltage check **failed** it, with rail 3 reading 0 V against a commanded 45 V every time. Until
   that is resolved no armed run's verdicts are interpretable. This is the single blocker on P1.
-- Priority 2 (droplet size) not designed or started. Its §2.4 questions 1, 3 and 4 are open.
+  The 2026-08-12 fix aligning voltage startup to `csvvolcont.py` **has never been tested on the
+  rig** — nothing has run since 2026-08-12.
+- **The split that worked once does not reproduce.** On 2026-08-13 `run_8piece_split.py` separated
+  live on hardware. On 2026-08-17 the same script, same hardcoded numbers, same plan frame for
+  frame, did **not** fully separate at its last stage. The verified label was pulled. The response —
+  widening stages and lengthening dwell — buys margin against a cause that has not been identified
+  and is itself untested; see `docs/guides/separation-and-dwell-tuning.md`.
+- **Split runs leave no artifact.** `chiphealth` writes a full `runs/<timestamp>/` bundle;
+  `microdrop` prints a report to the terminal and nothing else. So the central open problem above
+  is a discrepancy between two runs with **nothing on disk to diff.**
+- Priority 2's §2.4 questions 1, 3 and 4 remain open — and q1 now blocks interpretation of work
+  already done, not just work not yet started.
 - The plate gap is unmeasured, so droplet volumes stay unreportable (§2.4 q3).
 - `design.md` §9 q3 (what happens to the 13 legacy scripts) still undecided.
 - No ground-truth bad region exists on this chip, so detector thresholds remain provisional and
   the first valid armed runs are threshold calibration rather than measurement.
 
-**Next step:** resolve the voltage fault, then a dry run, then a valid armed run. After that,
-the Priority 2 gate — starting with §2.4 question 1, which decides what the deliverable even is.
+**Next step:** resolve the voltage fault, then a dry run, then a valid armed run — one variable at
+a time, since changing voltage and timing together is what made 2026-08-10 uninterpretable. In
+parallel, §2.4 question 1 needs answering: it decides what Priority 2's deliverable is, and
+`microdrop/` has now been built without it.
 
 ---
 

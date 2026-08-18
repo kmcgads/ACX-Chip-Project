@@ -1,21 +1,31 @@
 # Priority 1 — build status: BUILT, blocked on a hardware fault
 
-**Updated 2026-08-12.** All modules written. **326 tests, 324 passing** (the 2 failures are
-environment-dependent — see below). Run against real hardware on 2026-08-10: the camera and
-detection paths worked, **but no armed run has ever passed the voltage check**, so no armed run's
-verdicts are yet interpretable. That fault is the one thing standing between here and a result.
+**Updated 2026-08-18.** All modules written. Run against real hardware on 2026-08-10: the camera
+and detection paths worked, **but no armed run has ever passed the voltage check**, so no armed
+run's verdicts are yet interpretable. That fault is the one thing standing between here and a
+result, and **nothing has been run on the rig since 2026-08-12** — the voltage sequence fix below
+is therefore still untested against hardware.
 
     .venv/Scripts/python.exe -m unittest discover -s tests -t .
 
 > The venv in this repo is a **Windows** venv (`.venv/Scripts/`, not `.venv/bin/`) and does not
 > have pytest installed, so `unittest` is the runner. Under WSL, invoke `python.exe` as above.
 
-**The 2 failing tests.** `test_picker_create_returns_none_without_opencv` and
+**Test counts, 2026-08-18.** The suite is **520 tests, 518 passing and 2 skipped**. Of those,
+**379 cover Priority 1** — `chiphealth/` and `rescore.py` — and the other 141 belong to
+`microdrop/` (`test_splitplan.py` 86, `test_protocol.py` 55), which did not exist when this
+document was last counted. `test_actuation.py` and `test_clearance.py` are counted under
+Priority 1 because that is where they were built, but both packages depend on them.
+
+**The 2 skipped tests.** `test_picker_create_returns_none_without_opencv` and
 `test_picker_unavailable_says_so_and_still_aborts_cleanly` both assert that `CornerPicker.create()`
-returns `None` when OpenCV is unavailable. OpenCV *is* installed in this venv, so they fail here —
-and would fail on any machine with cv2. They are testing real behaviour with the wrong setup; the
-fix is to mock the import rather than depend on the ambient environment. Not caused by any recent
-change, and not a defect in the code under test.
+returns `None` when OpenCV is unavailable. OpenCV *is* installed in this venv, so they used to
+**fail** here — and on any machine with cv2. They are now guarded by
+`NEEDS_NO_CV2 = unittest.skipIf(HAVE_CV2, ...)` (`tests/test_run_health.py:40`), so the suite is
+green everywhere and the assertions still run on a machine without cv2. That is a correct report
+of the situation rather than a fix: the behaviour remains unexercised wherever OpenCV is present.
+Mocking the import, which would exercise it everywhere, is still outstanding — see
+[Still deferred](#still-deferred).
 
 ## Status since 2026-08-07
 
@@ -24,9 +34,11 @@ change, and not a defect in the code under test.
 | Camera bug fixes | ✅ committed |
 | Resolution / boundary-filter fixes | ✅ committed, validated |
 | Caterpillar transport — coarse sweep | ✅ committed (`ab25606`, `0f6e383`) |
-| Caterpillar transport — fine pass | ✅ written and tested, **uncommitted** as of 2026-08-12 |
+| Caterpillar transport — fine pass | ✅ committed (`3c6cd26`) |
+| Voltage startup aligned to `csvvolcont.py` | ✅ committed 2026-08-12, **never tested on the rig** |
 | First armed runs on the instrument | ⚠ attempted 2026-08-10, **blocked by a voltage fault** |
 | A valid armed run | ❌ not yet achieved |
+| Any run at all since 2026-08-12 | ❌ none — the newest directory in `runs/` is `20260812T214834Z` |
 
 ### Caterpillar transport — why every move is now two frames
 
@@ -301,28 +313,40 @@ at band changes — the pre-existing anisotropy, for which `--axes both` remains
 
 ## What exists
 
-Line counts as of 2026-08-12.
+Line counts as of 2026-08-18. `clearance.py` was missing from this table entirely; the rest grew
+in the 2026-08-12 voltage work and the 2026-08-17 documentation pass, which moved narrative out of
+module docstrings but also added the run-note and override plumbing the split work needed.
 
 | File | Lines | Role |
 |---|---|---|
 | `colormixing/camera.py` | 456 | **edited in place** (was 214) — persistent capture, wide-field detection |
-| `chiphealth/config.py` | 303 | all former magic numbers, one place |
-| `chiphealth/geometry.py` | 320 | homography, electrode↔pixel, registration check |
+| `chiphealth/config.py` | 392 | all former magic numbers, one place |
+| `chiphealth/geometry.py` | 321 | homography, electrode↔pixel, registration check |
 | `chiphealth/calibration.py` | 233 | corner validation, cache, drift reporting |
-| `chiphealth/sweep.py` | 371 | bands, serpentine, `grow_release`, block map, fine routing |
+| `chiphealth/clearance.py` | 223 | the off-grid gate — the single place bounds are measured |
+| `chiphealth/sweep.py` | 393 | bands, serpentine, `grow_release`, block map, fine routing |
 | `chiphealth/detector.py` | 326 | drag · residue · no-movement · unreachable |
-| `chiphealth/actuation.py` | 492 | `Drop`, real + fake backends, arming gate, voltage verify |
-| `chiphealth/recorder.py` | 454 | coverage map, artifacts, dataset fields |
+| `chiphealth/actuation.py` | 669 | `Drop`, real + fake backends, arming gate, voltage verify |
+| `chiphealth/recorder.py` | 553 | coverage map, artifacts, dataset fields |
 | `chiphealth/simulate.py` | 181 | synthetic rig with injectable faults |
-| `chiphealth/run_health.py` | 1304 | eight-phase orchestrator + corner picker + CLI |
+| `chiphealth/run_health.py` | 1594 | eight-phase orchestrator + corner picker + CLI |
 | `rescore.py` | 220 | offline re-scoring, label promotion |
-| `tests/` | 2654 | 285 tests |
+| `tests/` (Priority 1 only) | — | 379 tests across 9 files |
+
+The suite as a whole is 5,876 lines and 520 tests; the balance is `microdrop/`, which is
+Priority 2 and tracked in `objectives.md` §6 rather than here.
 
 ## Verified by running it
 
 Full synthetic run, 128×128, faults injected at block (3,12) and column 61. Figures re-measured
 2026-08-12 — they changed when caterpillar transport doubled the frame count and the row-1
 coverage fix closed the last blind spot.
+
+**Re-run 2026-08-18 and reproduced identically** — same 86 events, same
+`{unknown: 0, pass: 979, degraded: 10, fail: 35}`, same 45 suspicious blocks with 24 queued and 21
+named in the notes. Every figure below is current. Note what this does and does not establish: the
+pipeline is stable against its own fixture, which is a regression check, not evidence about the
+chip. See *Limitations the tests assert rather than hide* below.
 
 ```
 .venv/Scripts/python.exe -m chiphealth.run_health --chip-id sim --simulate \
@@ -534,7 +558,10 @@ need retuning.
   (`docs/spec/objectives.md` §2.4 q3).
 - Electrical / percentage scoring — no known path with the current hardware (`objectives.md` §1.6).
 - The ML model itself, and automatic degradation learning.
-- Mocking cv2 in the two environment-dependent picker tests.
+- **Mocking cv2 in the two picker tests.** They are now `skipIf`-guarded rather than failing, which
+  makes the suite green but leaves the no-OpenCV fallback unexercised on every machine that has
+  OpenCV — i.e. every machine anyone actually runs this on. Mocking the import is what would
+  actually test it.
 
 **Electrode pitch is no longer deferred** — resolved 2026-08-10 at 246.48 µm, in
 `ChipConfig.pitch_um`.

@@ -17,8 +17,8 @@ before the affected piece is built.
   five-subsystem instrument. **Partly aspirational**: written before any
   code existed. Read its header note first for what was actually built
   and which sections are superseded.
-* `p1_chip_health_design.md` — the design of the one piece that is built:
-  the chip-health sweep. Method, detection signatures, artifact schema.
+* `p1_chip_health_design.md` — the design of the chip-health sweep. Method,
+  detection signatures, artifact schema.
 * `p1_build_status.md` — **current state of the code.** Test counts, what
   changed when, bugs found and fixed, the hardware sessions so far, and
   the procedure for the next armed run.
@@ -32,3 +32,9 @@ and appended to `workspace/analysis.md`.)
 an active priority and everything below it moved up one. Older documents
 and log entries may still use the original numbering; `objectives.md`
 records the mapping.
+
+**⚠ This folder does not yet cover `microdrop/`** (noted 2026-08-18). The
+splitting package was built 2026-08-13 to 2026-08-17 and is documented in
+`microdrop/README.md` and `docs/guides/`, but it has no design document
+here and no entry in `requirements.md`. `objectives.md` §2 records what it
+is and how it diverges from the Priority 2 goal as written.
