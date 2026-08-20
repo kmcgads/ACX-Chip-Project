@@ -44,10 +44,16 @@ import openpyxl
 
 # ── DLL load ──────────────────────────────────────────────────────────────────
 
-os.add_dll_directory(r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows")
-microfluidics = ctypes.CDLL(
-    r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows\DLLTest.dll"
-)
+# Set ACX_DLL_PATH to the directory holding DLLTest.dll (the ACX pythonSDK
+# "windows" folder) to run against an SDK installed anywhere else. The literal
+# below stays as the fallback: it is the instrument PC's actual install path,
+# and this module is imported by the autonomous loop, so it must keep working
+# on that machine with no environment set up.
+_DLL_DIR = os.environ.get("ACX_DLL_PATH", "").strip() or \
+    r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows"
+
+os.add_dll_directory(_DLL_DIR)
+microfluidics = ctypes.CDLL(os.path.join(_DLL_DIR, "DLLTest.dll"))
 
 
 class Drop(Structure):
@@ -92,7 +98,12 @@ BASE_DROPS = list(RESERVOIRS)
 
 # ── CSV loader ────────────────────────────────────────────────────────────────
 
-CSV_PATH = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
+# ACX_COLORMIX_XLSX overrides. masterscript3.COLOR_MIX_XLSX reads the same env
+# var, because the loop writes this file and then reads it back -- if the two
+# ever point at different files the optimizer's suggestion silently stops
+# reaching the chip.
+CSV_PATH = os.environ.get("ACX_COLORMIX_XLSX", "").strip() or \
+    r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
 
 def _cell_int(ws, row, column, filepath):
     """

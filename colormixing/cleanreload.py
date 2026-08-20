@@ -48,8 +48,11 @@ __all__ = ["hold_reservoirs_and_drop", "move_to_graveyard", "shrink_graveyard"]
 
 # ── DLL singleton — loaded once, never closed ─────────────────────────────────
 
-_DLL_DIR  = r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows"
-_DLL_PATH = r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows\DLLTest.dll"
+# ACX_DLL_PATH overrides; the literal is the instrument PC's install and stays
+# as the fallback so that machine needs no environment set up.
+_DLL_DIR  = os.environ.get("ACX_DLL_PATH", "").strip() or \
+    r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows"
+_DLL_PATH = os.path.join(_DLL_DIR, "DLLTest.dll")
 
 os.add_dll_directory(_DLL_DIR)
 _dll = ctypes.CDLL(_DLL_PATH)   # loaded once — shared across all trials

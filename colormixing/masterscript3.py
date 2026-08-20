@@ -48,8 +48,10 @@ N_CALLS        = 5      # Max number of trials
 # False = run all steps back-to-back on cleanreload.STEP_DELAY
 SHRINK_INTERACTIVE = True
 
-# Must match the path csvvolcont.load_piece_widths() reads from
-COLOR_MIX_XLSX = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
+# Must match the path csvvolcont.load_piece_widths() reads from -- so take it
+# from csvvolcont rather than repeating the literal. Both honour
+# ACX_COLORMIX_XLSX; sharing the constant means they cannot drift apart.
+COLOR_MIX_XLSX = csvvolcont.CSV_PATH
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
