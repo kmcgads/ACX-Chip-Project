@@ -1,7 +1,8 @@
 {
   "// extraPaths": "camera.py lives in colormixing/ and is imported as a bare 'from camera import ...' after run_health puts that dir on sys.path (_find_camera_dir). The legacy scripts import each other as bare siblings too.",
   "extraPaths": [".", "colormixing", "basics"],
-  "include": ["chiphealth", "tests", "rescore.py", "colormixing", "basics"],
+  "// include": "microdrop was missing here until 2026-08-20, so 2,747 lines of production code got no type checking at all -- and an editor opening one of its files analysed it outside the project scope, which is how built-ins came to be reported undefined.",
+  "include": ["chiphealth", "microdrop", "tests", "rescore.py", "colormixing", "basics"],
   "exclude": ["**/__pycache__", "runs", "background"],
   "typeCheckingMode": "basic",
   "// reportMissingModuleSource": "cv2 ships inline types but no stub package; not actionable.",
