@@ -5,6 +5,8 @@
   "include": ["chiphealth", "microdrop", "tests", "rescore.py", "colormixing", "basics"],
   "exclude": ["**/__pycache__", "runs", "background"],
   "typeCheckingMode": "basic",
+  "// pythonPlatform": "The vendor DLL is Windows x64 and the venv is a Windows venv (.venv/Scripts). Analysing as Linux -- which is what running pyright under WSL infers -- hides the real target and flags Windows-only APIs like os.add_dll_directory, which actuation.py already guards with hasattr.",
+  "pythonPlatform": "Windows",
   "// reportMissingModuleSource": "cv2 ships inline types but no stub package; not actionable.",
   "reportMissingModuleSource": "none"
 }
