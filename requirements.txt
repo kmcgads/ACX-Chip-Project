@@ -1,0 +1,25 @@
+# Third-party dependencies, derived from the actual imports in this repo.
+#
+# Versions are the ones this project is developed and tested against; the
+# lower bounds are deliberate rather than pinned, since nothing here depends on
+# a version-specific API.
+#
+# NOT LISTED, ON PURPOSE:
+#   * The vendor DLL (DLLTest.dll). It ships with the ACX pythonSDK, is a
+#     Windows x64 binary, and is not a Python package -- point ACX_DLL_PATH at
+#     the folder holding it. See the README.
+#   * pytest. The suite runs on the standard library via unittest; see
+#     CONTRIBUTING.md for why.
+#
+# WHAT NEEDS WHAT
+#   microdrop/    nothing. Standard library only, enforced by a test that
+#                 hard-blocks cv2 and numpy at the import hook.
+#   rescore.py    nothing.
+#   chiphealth/   numpy always; opencv-python only for camera runs
+#                 (geometry, sweep, detector and calibration are pure).
+#   colormixing/  all four.
+
+numpy>=2.0
+opencv-python>=4.8
+openpyxl>=3.1
+scikit-optimize>=0.10
