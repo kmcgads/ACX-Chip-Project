@@ -30,7 +30,8 @@ every other package uses.
 Writes to `runs/<timestamp>/`: `run.json` (full config and code version),
 `summary.md`, `coverage.json`, plus `events.jsonl`, `observations.jsonl`,
 `timeline.jsonl` and media. Re-score an existing run offline with
-`python rescore.py` — thresholds can be retuned without re-running the chip.
+`python rescore.py runs/<timestamp>` — thresholds can be retuned without
+re-running the chip. The run directory argument is required.
 
 Expect roughly 1798 coarse frames (~15 min of dwell alone) plus camera and
 analysis time, then a ~2 min fine pass.

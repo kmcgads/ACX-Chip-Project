@@ -128,6 +128,15 @@ class RealBackend:
 
     def __init__(self, dll_dir: str, dll_name: str = "DLLTest.dll") -> None:
         self.dll_path = os.path.join(dll_dir, dll_name)
+        # Fail with the fix rather than with a Windows loader error code.
+        # Deliberately a FileNotFoundError: it is an OSError, which is what
+        # make_backend("auto") catches to fall back to the fake rig, so this
+        # stays a clearer message rather than a change in control flow.
+        if not os.path.isfile(self.dll_path):
+            raise FileNotFoundError(
+                f"vendor DLL not found at {self.dll_path!r}. Set ACX_DLL_PATH "
+                f"to the directory holding {dll_name} (the ACX pythonSDK "
+                f"'windows' folder), or pass --dll-dir.")
         if hasattr(os, "add_dll_directory"):  # Windows
             os.add_dll_directory(dll_dir)
         self.lib = ctypes.CDLL(self.dll_path)

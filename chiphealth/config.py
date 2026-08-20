@@ -16,7 +16,19 @@ from pathlib import Path
 # ── Vendor DLL ────────────────────────────────────────────────────────────────
 # Was hardcoded at 1pixsplit.py:37 (and cleanup.py:13, and every other script).
 # Confirmed still current by the researcher, 2026-08-06.
-DEFAULT_DLL_DIR = r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows"
+#
+# Resolution order, widest to narrowest:
+#   1. ``--dll-dir`` on the command line   (per run)
+#   2. ``ACX_DLL_PATH``                    (per machine)
+#   3. ``_INSTALL_DLL_DIR`` below          (the instrument PC's install)
+#
+# The env var exists so the SDK can live anywhere without editing source. The
+# literal stays as the fallback because it is the instrument PC's actual
+# install location and removing it would break the one machine that runs
+# hardware. Reading an env var is not a filesystem or hardware access, so the
+# module docstring's claim above still holds.
+_INSTALL_DLL_DIR = r"C:\Users\klmcg\Downloads\ACX_pythonSDK v1.2 3\ACX_pythonSDK\windows"
+DEFAULT_DLL_DIR = os.environ.get("ACX_DLL_PATH", "").strip() or _INSTALL_DLL_DIR
 DEFAULT_DLL_NAME = "DLLTest.dll"
 
 
