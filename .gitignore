@@ -1,8 +1,37 @@
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ── Virtual environments ─────────────────────────────────────────────────────
 .venv/
 venv/
+env/
 
+# ── Tooling caches ───────────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Editors and OS ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Local environment ────────────────────────────────────────────────────────
+# ACX_DLL_PATH and friends belong to the machine, not the repo. Never commit a
+# .env: on the instrument PC it holds absolute paths into a vendor SDK install.
+.env
+.env.*
+!.env.example
+
+# ── Experimental output ──────────────────────────────────────────────────────
 # Chip-health run output. Each run writes continuous video plus stills, so this
 # grows by tens of megabytes per run and must not enter the repo. The artifacts
 # are the experimental record -- back them up, just not here.
@@ -12,5 +41,3 @@ runs/
 # rewritten every run; committing it would hand the next clone a stale
 # calibration for a camera that has since moved.
 calibration.json
-
-
