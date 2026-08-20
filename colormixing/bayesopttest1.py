@@ -136,7 +136,13 @@ def hex_to_color(hex_color: str) -> ColorMeasurement:
 
 
 def _bgr_to_lab(bgr: tuple[int, int, int]) -> np.ndarray:
-    patch   = np.uint8([[list(bgr)]])
+    # np.array(..., dtype=np.uint8) rather than np.uint8([[...]]). The scalar
+    # constructor happens to build the same (1, 1, 3) array here, verified
+    # identical through cvtColor, but it is declared as taking something
+    # int-convertible -- so the nested list read as a scalar conversion, and
+    # the result read as a uint8 scalar being handed to cvtColor. Same bytes,
+    # stated as the array construction it actually is.
+    patch   = np.array([[list(bgr)]], dtype=np.uint8)
     ocv_lab = cv2.cvtColor(patch, cv2.COLOR_BGR2LAB)[0, 0]
     return np.array([ocv_lab[0] / 2.55, float(ocv_lab[1]) - 128.0, float(ocv_lab[2]) - 128.0])
 
@@ -305,7 +311,11 @@ class BlindOptimizer:
         n_calls:              int   = N_CALLS,
         n_initial_points:     int   = N_INITIAL_POINTS,
         convergence_delta_e:  float = CONVERGENCE_DELTA_E,
-        random_seed:          int   = RANDOM_SEED,
+        # Optional, not int: the module default is RANDOM_SEED = None, which
+        # means "new random target each run" and is passed straight to
+        # Optimizer(random_state=...), where None is valid and means seed from
+        # entropy. The annotation was contradicting its own default.
+        random_seed:          Optional[int] = RANDOM_SEED,
         log_dir:              Path  = LOG_DIR,
         color_mix_csv:        Path  = COLOR_MIX_CSV,
         opt_log_csv:          Path  = OPT_LOG_CSV,
@@ -344,6 +354,8 @@ class BlindOptimizer:
         Must be followed by a call to tell() before the next ask().
         """
         self._pending = self._skopt.ask()
+        if self._pending is None:
+            raise RuntimeError("Optimizer.ask() returned nothing.")
         self._iteration += 1
 
         # Trial 1 always uses the preset widths to match the CSV default (5, 5, 5)
