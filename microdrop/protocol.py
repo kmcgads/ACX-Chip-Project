@@ -120,10 +120,19 @@ class SplitSession:
     """
 
     chip: ChipController
-    root: SP.DropNode | None = None
+    #: Where the tree splits. Defaults to `splitplan.split_root()` -- 20x20 at
+    #: row 55, col 55.
+    #:
+    #: Defaulted by factory rather than by `None`, deliberately. These were
+    #: `X | None = None` filled in by `__post_init__`, which left every later
+    #: `self.root.height` looking like an access on `None`: the guarantee lived
+    #: in a method a type checker cannot follow out of. The factory moves the
+    #: guarantee into the declaration, so the invariant is stated where it is
+    #: read. No caller ever passed `None` for either.
+    root: SP.DropNode = field(default_factory=SP.split_root)
     axes: Sequence[SP.Axis] = SP.DEFAULT_AXES
     sp: P.SplitParams = P.DEFAULT
-    cfg: ChipConfig | None = None
+    cfg: ChipConfig = field(default_factory=ChipConfig)
     #: Walk the droplet in from the load position before splitting. TRUE by
     #: default: the researcher specified that loading happens at row 5, col 55
     #: and the droplet is then moved to the split position, so the walk is part
@@ -149,8 +158,6 @@ class SplitSession:
     notes: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        self.cfg = self.cfg or ChipConfig()
-        self.root = self.root or SP.split_root()
         self.plan = SP.plan_tree(self.root, self.axes, self.sp, cfg=self.cfg)
         if self.transport:
             self.approach_from = self.approach_from or SP.load_root()

@@ -2,7 +2,7 @@
 
 Every value below is either PROVEN -- a literal from that file -- or DERIVED
 from its ratios for a geometry it never performs. Which is which, the line
-numbers, and why csvvolcont rather than `1pixsplit.py`:
+numbers, and why csvvolcont rather than `microtest1.py`:
 docs/guides/provenance.md
 
 WHERE THIS DIVERGES FROM csvvolcont, AND WHY IT MUST
@@ -284,7 +284,7 @@ class SplitParams:
         centred stretch spends `gap // 2` of it on each side of the parent, and
         the centre-out erosion clears `gap // 2` of it into each child.
 
-        Cross-check against the only symmetric split in the repo: 1pixsplit's
+        Cross-check against the only symmetric split in the repo: microtest1's
         step 6 halves a 15-tall piece into two 5-tall halves with S2_GAP = 5.
         At `stretch_ratio=1.5` the formula here gives 6, not 5, because 15 is
         odd and gets rounded up to an even 16. One electrode apart, and the
