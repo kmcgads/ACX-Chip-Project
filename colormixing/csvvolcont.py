@@ -94,6 +94,43 @@ BASE_DROPS = list(RESERVOIRS)
 
 CSV_PATH = r"C:\Users\klmcg\OneDrive\Documents\colormixcsv.xlsx"
 
+def _cell_int(ws, row, column, filepath):
+    """
+    Read one cell as an int, failing with a message that names the cell.
+
+    Bare int(cell.value) crashed with a bare "int() argument must be ... not
+    'NoneType'" naming neither the file nor the cell, in three situations that
+    all really happen:
+
+      * the cell is empty;
+      * the cell holds a FORMULA. data_only=True asks for the cached result,
+        and there is none unless Excel itself last saved the file. openpyxl
+        does not write cached values, so masterscript3's
+        write_widths_to_xlsx() -- load, set, save -- strips them from the whole
+        workbook. A formula in row 2 therefore reads back as None after the
+        first autonomous trial writes to it;
+      * the cell holds text that is not a number.
+
+    Raising here means the run stops before any electrode is energised, with a
+    message saying which cell to look at.
+    """
+    value = ws.cell(row=row, column=column).value
+    if value is None:
+        raise ValueError(
+            f"{filepath}: row {row}, column {column} is empty (or holds a "
+            f"formula with no cached result -- open it in Excel and save, or "
+            f"replace the formula with a plain number). Expected a piece "
+            f"width.")
+    if isinstance(value, str):
+        value = value.strip()
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{filepath}: row {row}, column {column} is {value!r}, which is "
+            f"not a whole-number piece width.") from exc
+
+
 def load_piece_widths(filepath=CSV_PATH):
     """
     Read piece end-widths from row 2 of the Excel file.
@@ -103,9 +140,11 @@ def load_piece_widths(filepath=CSV_PATH):
     """
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active
-    piece1_end_w = int(ws.cell(row=2, column=1).value)
-    piece2_end_w = int(ws.cell(row=2, column=2).value)
-    piece3_end_w = int(ws.cell(row=2, column=3).value)
+    if ws is None:
+        raise ValueError(f"{filepath}: no active worksheet")
+    piece1_end_w = _cell_int(ws, 2, 1, filepath)
+    piece2_end_w = _cell_int(ws, 2, 2, filepath)
+    piece3_end_w = _cell_int(ws, 2, 3, filepath)
     print(f"\n[CSV] Loaded piece end-widths from: {filepath}")
     print(f"      piece_1={piece1_end_w}, piece_2={piece2_end_w}, piece_3={piece3_end_w}")
     print(f"      Height fixed at {MAIN_H} for all drops.\n")

@@ -27,6 +27,7 @@ Usage: python run_experiment.py
 import sys
 import os
 import openpyxl
+from openpyxl.cell.cell import MergedCell
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
@@ -75,12 +76,29 @@ def capture_color(cam: CameraInterface) -> str:
 
 
 def write_widths_to_xlsx(w1: int, w2: int, w3: int, path: str = COLOR_MIX_XLSX) -> None:
-    """Write Bayesian-suggested widths to row 2 of colormixcsv.xlsx."""
+    """Write Bayesian-suggested widths to row 2 of colormixcsv.xlsx.
+
+    Row 2 columns 1-3 must be three ordinary cells. If any of them is inside a
+    merged range, openpyxl hands back a MergedCell whose `value` is read-only,
+    and the bare assignment this used to do died on
+    `'MergedCell' object attribute 'value' is read-only` -- mid-loop, naming
+    neither the file nor the cell. Checked up front instead, so the run stops
+    with something actionable before it writes a partial row.
+    """
     wb = openpyxl.load_workbook(path)
     ws = wb.active
-    ws.cell(row=2, column=1).value = w1
-    ws.cell(row=2, column=2).value = w2
-    ws.cell(row=2, column=3).value = w3
+    if ws is None:
+        raise ValueError(f"{path}: no active worksheet")
+    cells = []
+    for column in (1, 2, 3):
+        cell = ws.cell(row=2, column=column)
+        if isinstance(cell, MergedCell):
+            raise ValueError(
+                f"{path}: row 2, column {column} is inside a merged range and "
+                f"cannot be written. Unmerge row 2, columns 1-3.")
+        cells.append(cell)
+    for cell, width in zip(cells, (w1, w2, w3)):
+        cell.value = width
     wb.save(path)
     print(f"  [XLSX] Widths written → piece_1={w1}, piece_2={w2}, piece_3={w3}")
 
