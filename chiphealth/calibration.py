@@ -56,11 +56,22 @@ class Calibration:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Calibration":
+        """Rebuild from JSON, validating shape on the way in.
+
+        Routed through the ``as_*`` coercers below rather than building tuples
+        with generator expressions. A generator gives ``tuple[float, ...]`` --
+        indeterminate length -- so a cache holding a 3-value "point" or a
+        3-value frame size would have been accepted here and only misbehaved
+        later, inside a homography that fits whatever it is given. The coercers
+        unpack, so a malformed cache raises `ValueError` and `load_cache` turns
+        that into `None`, which is the documented "corrupt cache is ignored"
+        behaviour.
+        """
         return cls(
-            corners_px=tuple(tuple(float(v) for v in p) for p in d["corners_px"]),
-            frame_size=tuple(int(v) for v in d["frame_size"]),
-            px_per_electrode=tuple(float(v) for v in d.get("px_per_electrode",
-                                                           (0.0, 0.0))),
+            corners_px=as_corners(d["corners_px"]),
+            frame_size=as_frame_size(d["frame_size"]),
+            px_per_electrode=as_px_per_electrode(
+                d.get("px_per_electrode", (0.0, 0.0))),
             created=d.get("created", ""),
             chip_id=d.get("chip_id", ""),
         )
@@ -97,6 +108,20 @@ def as_frame_size(value) -> tuple[int, int]:
         raise ValueError(f"frame size is not a (width, height) pair: "
                          f"{value!r}") from exc
     return (int(w), int(h))
+
+
+def as_px_per_electrode(value) -> tuple[float, float]:
+    """Coerce an (x, y) pixels-per-electrode pair, rejecting anything else.
+
+    Same job as `as_frame_size`, in float. Kept separate rather than generalised
+    because the error message names the field, and these are the only two.
+    """
+    try:
+        x, y = value
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"px_per_electrode is not an (x, y) pair: "
+                         f"{value!r}") from exc
+    return (float(x), float(y))
 
 
 def load_cache(path) -> Calibration | None:

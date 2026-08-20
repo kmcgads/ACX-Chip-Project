@@ -19,6 +19,22 @@ OpenCV and no hardware. That is what lets the detection logic be developed and
 tested on a machine with neither (docs/spec/design.md §7).
 """
 
+from typing import TYPE_CHECKING
+
+# Submodule names in a package's __all__ are resolved by the import system:
+# `from chiphealth import *` imports all six, and that is verified to work. A
+# type checker does not run the import system, so it sees six names in __all__
+# that the module never binds and reports each one.
+#
+# This block exists to tell it otherwise, and is deliberately NOT a plain
+# import. Importing the six eagerly would make `import chiphealth.geometry`
+# drag in `actuation` and `recorder` as well, coupling the three pure modules
+# to the hardware and artifact layers at import time -- the exact property the
+# docstring above claims and docs/spec/design.md §7 relies on. TYPE_CHECKING is
+# false at runtime, so this costs nothing and changes no import graph.
+if TYPE_CHECKING:
+    from . import actuation, config, detector, geometry, recorder, sweep
+
 __all__ = [
     "config",
     "geometry",

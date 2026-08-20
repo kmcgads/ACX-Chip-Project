@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import numpy.typing as npt
 
 # Corner order used throughout: top-left, top-right, bottom-right, bottom-left.
 CORNER_ORDER = ("top_left", "top_right", "bottom_right", "bottom_left")
@@ -70,8 +71,13 @@ def fit_homography(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
                      [h[6], h[7], 1.0]], dtype=float)
 
 
-def apply_homography(h: np.ndarray, pts: np.ndarray) -> np.ndarray:
-    """Apply ``h`` to an (N, 2) array of points, returning (N, 2)."""
+def apply_homography(h: np.ndarray, pts: npt.ArrayLike) -> np.ndarray:
+    """Apply ``h`` to an (N, 2) array of points, returning (N, 2).
+
+    ``pts`` is ``ArrayLike``, not ``ndarray``, because the first thing this does
+    is ``asarray`` it -- callers legitimately pass a bare ``[[x, y]]`` and always
+    have. ``h`` stays ``ndarray``: it is used as ``h.T`` without coercion.
+    """
     pts = np.atleast_2d(np.asarray(pts, dtype=float))
     ones = np.ones((pts.shape[0], 1), dtype=float)
     homog = np.hstack([pts, ones]) @ h.T
