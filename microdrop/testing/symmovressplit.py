@@ -78,12 +78,31 @@ MERGE ARITHMETIC
     reservoir after split 1     20 x 10  = 200 electrodes
     + A1 (10x10)                        = 300  commanded 20x15 = 300  EXACT
     + B1 (10x5)                         = 350  commanded 20x18 = 360  +2.9%
+    + C1 (5x5)                          = 375  commanded 20x19 = 380  +1.3%
 
-The second merge has NO rectangle of height 20 with area 350, and `Drop` can
-only express rectangles. Commanding 360 for 350 of liquid is the accepted
-approximation (researcher decision). For scale, splits in this repo run at
-45-60% areal coverage during the stretch, so a 3% over-command is small -- but
-it is a real mismatch and the run report says so.
+Merges 2 and 3 have no rectangle of height 20 with exactly their area, and
+`Drop` can only express rectangles, so the width is rounded UP and the
+reservoir is commanded slightly larger than its contents (researcher decision,
+option A). The over-commit does not compound -- it IMPROVES, 2.9% to 1.3%,
+because 375 sits closer to a multiple of 20 than 350 does. Liquid is tracked
+separately from the commanded rectangle in `build_sequence` for exactly this
+reason: deriving each merge from the previous COMMANDED area would fold the
+over-commit into the arithmetic and inflate it every round.
+
+For scale, splits in this repo run at 45-60% areal coverage during the stretch,
+so a 1-3% over-command is small -- but it is a real mismatch and the run report
+says so.
+
+WHY THE LAST TRANSIT GOES LEFT
+==============================
+Every transit before it moves the continuing piece further right. The fourth
+cannot: C2 starts at cols 115-119 and +25 would put it at 140-144, off a
+128-wide array. Shortening that transit to the 9 electrodes that would fit
+would make it the one un-proven movement distance in the run. Instead C2 moves
+the proven 25 electrodes BACK toward the reservoir, into space the returning
+pieces have vacated. It is the only transit where both movers travel the same
+direction; they remain on disjoint rows, so nothing changes about collision
+safety.
 
 Operator gates, exit codes, and what a camera-free run cannot verify:
 docs/guides/running-the-split-scripts.md
@@ -199,6 +218,10 @@ def build_sequence(sp: P.SplitParams):
                    f"reservoir at col {res.col}, piece A at col {piece_a.col}, "
                    f"neck gap {step.neck_gap}"))
     R = _rect(res)
+    # Liquid, tracked separately from the COMMANDED rectangle. They coincide
+    # until merge 2 over-commands; after that, deriving the next merge from
+    # R[0]*R[1] would compound the over-commit into the arithmetic.
+    res_liquid = R[0] * R[1]
 
     # ── transit 1: A right, reservoir stationary ──────────────────────────
     A = _rect(piece_a)
@@ -241,12 +264,12 @@ def build_sequence(sp: P.SplitParams):
     A2 = (A2[0], A2[1], A2[2], A2[3] + TRANSIT)
 
     # ── merge 1: reservoir absorbs A1. EXACT area ─────────────────────────
-    liquid = R[0] * R[1] + A1[0] * A1[1]
-    R = (R[0], liquid // R[0], R[2], R[3])          # 20 x 15
+    res_liquid += A1[0] * A1[1]
+    R = (R[0], -(-res_liquid // R[0]), R[2], R[3])  # 20 x 15
     phases.append(("MERGE 1: reservoir absorbs A1", "merge",
                    [(R, A2)],
-                   f"commanded {R[0]}x{R[1]} = {R[0] * R[1]}, liquid {liquid} "
-                   f"-- EXACT"))
+                   f"commanded {R[0]}x{R[1]} = {R[0] * R[1]}, liquid "
+                   f"{res_liquid} -- EXACT"))
 
     # ── split 3: halve A2's width -> B1 (returns) + B2 (goes on) ──────────
     a2_node = SP.DropNode(id="a2", parent=None, stage=0,
@@ -280,26 +303,78 @@ def build_sequence(sp: P.SplitParams):
     B2 = (B2[0], B2[1], B2[2], B2[3] + TRANSIT)
 
     # ── merge 2: reservoir absorbs B1. APPROXIMATE area ───────────────────
-    liquid = R[0] * R[1] + B1[0] * B1[1]
-    width = -(-liquid // R[0])                      # round the width UP
-    R = (R[0], width, R[2], R[3])                   # 20 x 18
+    res_liquid += B1[0] * B1[1]
+    R = (R[0], -(-res_liquid // R[0]), R[2], R[3])  # 20 x 18
     phases.append(("MERGE 2: reservoir absorbs B1", "merge",
                    [(R, B2)],
-                   f"commanded {R[0]}x{R[1]} = {R[0] * R[1]}, liquid {liquid} "
-                   f"-- OVER-COMMANDED by {R[0] * R[1] - liquid} "
-                   f"({(R[0] * R[1] / liquid - 1) * 100:.1f}%)"))
+                   f"commanded {R[0]}x{R[1]} = {R[0] * R[1]}, liquid "
+                   f"{res_liquid} -- OVER-COMMANDED by "
+                   f"{R[0] * R[1] - res_liquid} "
+                   f"({(R[0] * R[1] / res_liquid - 1) * 100:.1f}%)"))
 
-    return phases, R, B2
+    # ── split 4: halve B2's height -> C1 (returns) + C2 (goes on) ─────────
+    # MUST be the height axis. B2 is 10x5 and 5 is odd, so a width split would
+    # need 2.5 and `child_extent` refuses it rather than rounding. The H
+    # stretch also happens to cost no COLUMN space -- it grows rows 77-94 and
+    # leaves B2 at cols 115-119 -- which is why a 4th split fits at all this
+    # close to the edge.
+    b2_node = SP.DropNode(id="b2", parent=None, stage=0,
+                          height=B2[0], width=B2[1], row=B2[2], col=B2[3])
+    r_node = SP.DropNode(id="R", parent=None, stage=0,
+                         height=R[0], width=R[1], row=R[2], col=R[3])
+    step, (c1, c2) = SP.split_frames(b2_node, "H", [r_node], sp)
+    phases.append(("split 4 (H): 10x5 -> two 5x5", "split",
+                   [tuple(_rect(d) for d in f.drops) for f in step.frames],
+                   f"C1 at row {c1.row} (returns), C2 at row {c2.row} "
+                   f"(continues), neck gap {step.neck_gap}"))
+    C1, C2 = _rect(c1), _rect(c2)
+
+    # ── align C1 onto the reservoir's rows ────────────────────────────────
+    c1_rows = R[2] + R[0] - C1[0]
+    up = C1[2] - c1_rows
+    phases.append(("align C1 for its return", "walk",
+                   _walk(C1, (R, C2), "row", up, -1),
+                   f"{up} electrodes up to row {c1_rows}"))
+    C1 = (C1[0], C1[1], c1_rows, C1[3])
+
+    # ── transit 4: C1 home, C2 also LEFT ──────────────────────────────────
+    # The one transit where both movers go the SAME way. Continuing right
+    # would put C2 at cols 140-144, off a 128-wide array. Rather than shorten
+    # the transit to a token 9 electrodes, C2 moves back toward the reservoir
+    # into the space the returning pieces vacated -- the proven 25 electrodes,
+    # in the only direction with room. Still one frame for both, and still
+    # collision-free because the two are always on disjoint rows.
+    c1_home = R[3] + R[1]
+    c1_dist = C1[3] - c1_home
+    phases.append(("transit 4: C1 left / C2 left (same frames)", "transit",
+                   _walk_pair(C1, C2, (R,), "col", c1_dist, -1,
+                              "col", TRANSIT, -1),
+                   f"C1 {c1_dist} left to col {c1_home}, C2 {TRANSIT} LEFT "
+                   f"(right would leave the array)"))
+    C1 = (C1[0], C1[1], C1[2], c1_home)
+    C2 = (C2[0], C2[1], C2[2], C2[3] - TRANSIT)
+
+    # ── merge 3: reservoir absorbs C1 ─────────────────────────────────────
+    res_liquid += C1[0] * C1[1]
+    R = (R[0], -(-res_liquid // R[0]), R[2], R[3])  # 20 x 19
+    phases.append(("MERGE 3: reservoir absorbs C1", "merge",
+                   [(R, C2)],
+                   f"commanded {R[0]}x{R[1]} = {R[0] * R[1]}, liquid "
+                   f"{res_liquid} -- OVER-COMMANDED by "
+                   f"{R[0] * R[1] - res_liquid} "
+                   f"({(R[0] * R[1] / res_liquid - 1) * 100:.1f}%)"))
+
+    return phases, R, C2
 
 
 # ── What the above must produce ───────────────────────────────────────────────
 
-EXPECT_RESERVOIR = (20, 18, 55, 5)      # final reservoir, 360 commanded
-EXPECT_FAR_PIECE = (10, 5, 81, 115)     # B2, the piece that never came back
-EXPECT_FINAL_LIQUID = 350               # reservoir contents
+EXPECT_RESERVOIR = (20, 19, 55, 5)      # final reservoir, 380 commanded
+EXPECT_FAR_PIECE = (5, 5, 90, 90)       # C2, the piece that never came back
+EXPECT_FINAL_LIQUID = 375               # reservoir contents
 EXPECT_TOTAL_LIQUID = 400               # conserved from the 20x20
-EXPECT_PHASES = 12
-EXPECT_FRAMES = 201
+EXPECT_PHASES = 16
+EXPECT_FRAMES = 310
 
 
 def check_geometry(phases, reservoir, far_piece):
@@ -404,6 +479,11 @@ GATE = {
     "MERGE 2: reservoir absorbs B1":
         "Has B1 COALESCED into the reservoir, and B2 moved right? (Again: the "
         "merge is the weakest claim this run makes.)",
+    "split 4 (H): 10x5 -> two 5x5": "TWO 5x5 pieces, fully separated? These "
+                                    "are the smallest pieces in the run.",
+    "MERGE 3: reservoir absorbs C1":
+        "Has C1 COALESCED into the reservoir, and C2 moved LEFT? (Third merge, "
+        "same weakest-claim caveat -- and note C2 moves left here, not right.)",
 }
 
 
