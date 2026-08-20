@@ -14,6 +14,8 @@ from chiphealth.actuation import ChipController, FakeBackend
 from chiphealth.config import DetectorConfig, RunConfig
 from chiphealth.detector import Detector
 from chiphealth.recorder import RunRecorder
+
+from . import not_none
 from chiphealth.run_health import (HealthRun, LiveView, Prompter, SyntheticSource,
                                    main, parse_corners, parse_dead)
 
@@ -56,7 +58,7 @@ class TestArgParsing(unittest.TestCase):
         self.assertEqual(len(parse_dead("3,12;col=61")), 16 + 128)
 
     def test_corners(self):
-        self.assertEqual(len(parse_corners("1,2;3,4;5,6;7,8")), 4)
+        self.assertEqual(len(not_none(parse_corners("1,2;3,4;5,6;7,8"))), 4)
         self.assertIsNone(parse_corners(""))
         with self.assertRaises(ValueError):
             parse_corners("1,2;3,4")
@@ -1071,8 +1073,13 @@ class TestResolutionRequest(unittest.TestCase):
             fn = next(f for f in cls.body
                       if isinstance(f, ast.FunctionDef) and f.name == name)
             self.assertIn("resolution", [a.arg for a in fn.args.args])
-            self.assertIsInstance(fn.args.defaults[-1], ast.Constant)
-            self.assertIsNone(fn.args.defaults[-1].value)
+            # self.fail() is NoReturn, so this narrows where assertIsInstance
+            # cannot -- and says which node it actually found.
+            default = fn.args.defaults[-1]
+            if not isinstance(default, ast.Constant):
+                self.fail(f"{name}'s last default is {type(default).__name__}, "
+                          f"not a literal constant")
+            self.assertIsNone(default.value)
 
 
 class TestOnChipFilter(unittest.TestCase):
@@ -1203,7 +1210,8 @@ class TestStepDelayGuard(unittest.TestCase):
                 self.assertIsNone(self.check(delay, armed=False))
 
     def test_armed_below_the_floor_is_refused(self):
-        res = self.check(0.05, armed=True)
+        res = not_none(self.check(0.05, armed=True),
+                       "a fast armed run must be refused, not waved through")
         self.assertFalse(res.ok)
         self.assertIn("0.25", res.message)
         self.assertIn("2026-08-10", res.message)
@@ -1212,17 +1220,17 @@ class TestStepDelayGuard(unittest.TestCase):
         self.assertIsNone(self.check(0.5, armed=True))
 
     def test_armed_at_the_floor_is_allowed_but_recorded(self):
-        res = self.check(0.25, armed=True)
+        res = not_none(self.check(0.25, armed=True))
         self.assertTrue(res.ok)
-        self.assertIsNotNone(res.note)
-        self.assertIn("NON-DEFAULT TIMING", res.note)
+        note = not_none(res.note)
+        self.assertIn("NON-DEFAULT TIMING", note)
         # 0.25 per frame x 2 frames = the 0.5s per electrode legacy gives.
-        self.assertIn("0.50s", res.note)
+        self.assertIn("0.50s", note)
 
     def test_the_override_permits_a_fast_armed_run(self):
-        res = self.check(0.05, armed=True, allow=True)
+        res = not_none(self.check(0.05, armed=True, allow=True))
         self.assertTrue(res.ok)
-        self.assertIn("NON-DEFAULT TIMING", res.note)
+        self.assertIn("NON-DEFAULT TIMING", not_none(res.note))
 
     def test_a_fast_armed_run_is_refused_with_a_nonzero_exit(self):
         tmp = tempfile.TemporaryDirectory()
@@ -1277,8 +1285,9 @@ class TestBandsFlag(unittest.TestCase):
 
     def test_the_partial_sweep_is_named_in_the_notes(self):
         _, meta, _, _ = self.run_with("--bands", "1")
-        note = next((n for n in meta["notes"] if "PARTIAL SWEEP" in n), None)
-        self.assertIsNotNone(note, meta["notes"])
+        note = not_none(
+            next((n for n in meta["notes"] if "PARTIAL SWEEP" in n), None),
+            f"no PARTIAL SWEEP note in {meta['notes']}")
         self.assertIn("1 of 7 bands", note)
         self.assertIn("NOT a coverage result", note)
 
@@ -1378,8 +1387,9 @@ class TestDryRunVerdictsAreMarked(unittest.TestCase):
         finally:
             logging.disable(logging.NOTSET)
             tmp.cleanup()
-        note = next((n for n in meta["notes"] if n.startswith("DRY-RUN:")), None)
-        self.assertIsNotNone(note, meta["notes"])
+        note = not_none(
+            next((n for n in meta["notes"] if n.startswith("DRY-RUN:")), None),
+            f"no DRY-RUN note in {meta['notes']}")
         self.assertIn("ARTEFACTS OF NOT ENERGISING", note)
         self.assertIn("--arm", note)
 
@@ -1500,9 +1510,9 @@ class TestRegistrationFailureIsDiagnosable(unittest.TestCase):
             tmp.cleanup()
 
     def test_a_failure_writes_every_blob_not_just_the_primary(self):
-        ok, payload, _ = self._run(self.Glare())
+        ok, payload_or_none, _ = self._run(self.Glare())
         self.assertFalse(ok)
-        self.assertIsNotNone(payload, "no evidence file written")
+        payload = not_none(payload_or_none, "no evidence file written")
         self.assertEqual(payload["n_blobs"], 2)
         areas = [b["area_electrodes"] for b in payload["blobs"]]
         self.assertEqual(areas, sorted(areas, reverse=True), "not largest-first")
@@ -1512,7 +1522,8 @@ class TestRegistrationFailureIsDiagnosable(unittest.TestCase):
         self.assertAlmostEqual(runner_up["centroid_row"], 14.5)
 
     def test_it_records_what_was_expected_so_the_file_stands_alone(self):
-        _, payload, _ = self._run(self.Glare())
+        _, payload_or_none, _ = self._run(self.Glare())
+        payload = not_none(payload_or_none, "no evidence file written")
         exp = payload["expected"]
         self.assertAlmostEqual(exp["centroid_row"], 14.5)
         self.assertAlmostEqual(exp["centroid_col"], 19.5)
@@ -1531,9 +1542,9 @@ class TestRegistrationFailureIsDiagnosable(unittest.TestCase):
                 from chiphealth.detector import Observation
                 return Observation(step.idx, frame_index, t, ())
 
-        ok, payload, _ = self._run(Empty())
+        ok, payload_or_none, _ = self._run(Empty())
         self.assertFalse(ok)
-        self.assertIsNotNone(payload, "an empty frame is evidence too")
+        payload = not_none(payload_or_none, "an empty frame is evidence too")
         self.assertEqual(payload["n_blobs"], 0)
         self.assertIn("no blob detected at all", payload["reasons"])
 

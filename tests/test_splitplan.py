@@ -18,6 +18,9 @@ unverified; see test_volume_equality_is_not_claimed.
 
 import itertools
 import unittest
+from typing import cast
+
+from . import not_none
 
 from chiphealth import clearance
 from chiphealth.clearance import ClearanceViolation
@@ -424,7 +427,7 @@ class TestSymmetry(unittest.TestCase):
         self.assertIsNone(ChipConfig().gap_um)
         self.assertFalse(hasattr(DropNode, "volume_nl"))
         self.assertFalse(hasattr(DropNode, "volume"))
-        self.assertIn("unverified", P.__doc__.lower())
+        self.assertIn("unverified", not_none(P.__doc__).lower())
 
         # NOT CLAIMED: that the chip obliges. The assumption that makes the
         # proxy valid must travel with the verdict, not live in a comment.
@@ -718,8 +721,10 @@ class TestSplitPosition(unittest.TestCase):
 
     def test_it_is_centred_on_both_axes_at_both_depths(self):
         """Reason 2: equal margin every direction, so drift has equal room."""
-        for axes, expected in ((("W", "H", "W"), (46, 46, 42, 42)),
-                               (("W", "H", "W", "H"), (42, 42, 42, 42))):
+        cases: tuple[tuple[tuple[SP.Axis, ...], tuple[int, int, int, int]], ...] = (
+            (("W", "H", "W"), (46, 46, 42, 42)),
+            (("W", "H", "W", "H"), (42, 42, 42, 42)))
+        for axes, expected in cases:
             r0, r1, c0, c1 = SP.plan_bounds(plan_tree(SP.split_root(), axes))
             gaps = (r0 - 1, 128 - r1, c0 - 1, 128 - c1)
             self.assertEqual(gaps, expected, axes)
@@ -952,7 +957,9 @@ class TestPlanTree(unittest.TestCase):
         expected = {"WWH": 7.2, "WHW": 3.6, "WHH": 3.6,
                     "HWW": 3.6, "HWH": 3.6, "HHW": 7.2}
         for axes, worst in expected.items():
-            axes_t = tuple(axes)
+            # Keys of `expected` above, so every character is "W" or "H";
+            # tuple(str) widens to tuple[str, ...] and loses that.
+            axes_t = cast(tuple[SP.Axis, ...], tuple(axes))
             plan = plan_tree(cleared_root(axes=axes_t), axes=axes_t)
             self.assertAlmostEqual(_worst_stretched_aspect(plan), worst,
                                    msg=f"ordering {axes}")
@@ -982,7 +989,9 @@ class TestPhysicalUnits(unittest.TestCase):
 
     def test_leaf_footprint_at_the_measured_pitch(self):
         leaf = plan_tree(cleared_root()).leaves[0]
-        h_mm, w_mm = leaf.size_mm()
+        # size_mm() is None only when the pitch is unknown; it is not, so this
+        # also pins that the measured pitch is still reaching the planner.
+        h_mm, w_mm = not_none(leaf.size_mm())
         self.assertAlmostEqual(h_mm, 2.4648, places=3)
         self.assertAlmostEqual(w_mm, 1.2324, places=3)
 

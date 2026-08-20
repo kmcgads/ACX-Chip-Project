@@ -10,6 +10,7 @@ if someone adds `import numpy` anywhere under `microdrop`, or reaches into
 import builtins
 import sys
 import unittest
+from typing import Sequence
 
 from chiphealth.actuation import ChipController, Drop, FakeBackend
 from chiphealth.clearance import ClearanceViolation
@@ -19,6 +20,8 @@ from microdrop import protocol as PR
 from microdrop import splitplan as SP
 from microdrop.protocol import OperatorAbort, SplitSession
 from microdrop.splitplan import plan_tree, require_clearance
+
+from . import not_none
 
 ROWS = COLS = 128
 
@@ -191,7 +194,7 @@ class TestGates(unittest.TestCase):
         later = [f for st in s.plan.steps if st.stage == 2 for f in st.frames]
         self.assertEqual(
             len(s.chip.intended),
-            1 + s.approach.n_frames + s.plan.n_frames - len(later))
+            1 + not_none(s.approach).n_frames + s.plan.n_frames - len(later))
 
     def test_every_answer_is_recorded(self):
         """The only artifact a camera-free run produces."""
@@ -226,9 +229,15 @@ class TestEnergising(unittest.TestCase):
         c.open()
         real = c.activate
 
-        def spy(drops, **kw):
+        # Signature mirrors ChipController.activate so the spy is a genuine
+        # stand-in rather than an untyped shim -- a drift in the real signature
+        # should surface here, not be swallowed by **kw.
+        def spy(drops: Sequence[Drop], settle: bool = True,
+                allow_violations: bool | None = None,
+                extra_settle_s: float = 0.0) -> int:
             order.append(("activate", tuple((d.row, d.col) for d in drops)))
-            return real(drops, **kw)
+            return real(drops, settle=settle, allow_violations=allow_violations,
+                        extra_settle_s=extra_settle_s)
 
         c.activate = spy
         op = Operator()
@@ -253,7 +262,7 @@ class TestEnergising(unittest.TestCase):
         s, op = session()
         s.run()
         self.assertEqual(s.chip.frames_sent,
-                         1 + s.approach.n_frames + s.plan.n_frames)
+                         1 + not_none(s.approach).n_frames + s.plan.n_frames)
 
 
 class TestClearanceStillGates(unittest.TestCase):
@@ -283,19 +292,20 @@ class TestApproach(unittest.TestCase):
 
     def test_the_walk_is_the_default_and_runs_from_the_load_position(self):
         s, _ = session()
-        self.assertIsNotNone(s.approach)
-        self.assertEqual(s.approach.from_rc, (SP.SPLIT_LOAD_ROW,
-                                              SP.SPLIT_LOAD_COL))
-        self.assertEqual(s.approach.to_rc, (SP.SPLIT_ROOT_ROW,
-                                            SP.SPLIT_ROOT_COL))
+        approach = not_none(s.approach)
+        self.assertEqual(approach.from_rc, (SP.SPLIT_LOAD_ROW,
+                                            SP.SPLIT_LOAD_COL))
+        self.assertEqual(approach.to_rc, (SP.SPLIT_ROOT_ROW,
+                                          SP.SPLIT_ROOT_COL))
 
     def test_sharing_a_column_makes_it_one_straight_leg(self):
         """Load and split share column 55, so the walk has no corner: 50
         electrodes down, against 95 and an L-turn from the sweep position."""
         s, _ = session()
-        self.assertEqual(s.approach.electrodes, 50)
-        self.assertEqual(s.approach.n_frames, 100)
-        cols = {d.col for f in s.approach.frames for d in f.drops}
+        approach = not_none(s.approach)
+        self.assertEqual(approach.electrodes, 50)
+        self.assertEqual(approach.n_frames, 100)
+        cols = {d.col for f in approach.frames for d in f.drops}
         self.assertEqual(cols, {SP.SPLIT_LOAD_COL})
 
     def test_transport_false_skips_it_entirely(self):
@@ -309,13 +319,13 @@ class TestApproach(unittest.TestCase):
         s.run()
         self.assertIn("nothing left behind", op.asked[1])
         self.assertEqual(s.chip.frames_sent,
-                         1 + s.approach.n_frames + s.plan.n_frames)
+                         1 + not_none(s.approach).n_frames + s.plan.n_frames)
 
     def test_a_no_on_arrival_stops_before_the_tree(self):
         s, op = session(Operator([True, False]))
         with self.assertRaises(OperatorAbort):
             s.run()
-        self.assertEqual(s.chip.frames_sent, 1 + s.approach.n_frames)
+        self.assertEqual(s.chip.frames_sent, 1 + not_none(s.approach).n_frames)
 
 
 class TestSixteenPieces(unittest.TestCase):
@@ -369,7 +379,7 @@ class TestSixteenPieces(unittest.TestCase):
     def test_the_whole_run_is_260_frames(self):
         s, op = session(axes=self.AXES)
         s.run()
-        self.assertEqual(s.approach.n_frames, 100)
+        self.assertEqual(not_none(s.approach).n_frames, 100)
         self.assertEqual(s.plan.n_frames, 159)
         self.assertEqual(s.chip.frames_sent, 260)      # + the hold frame
 
@@ -612,7 +622,7 @@ class TestPerStageDwell(unittest.TestCase):
         self.assertEqual(sorted(set(slept)), [0.5, 1.0])
         self.assertEqual(slept.count(1.0), 104)            # stage 3 only
         self.assertAlmostEqual(
-            sum(slept), s.approach.duration_s() + s.plan.duration_s())
+            sum(slept), not_none(s.approach).duration_s() + s.plan.duration_s())
 
     def test_a_dry_run_still_sleeps_nothing(self):
         """The da787-era regression guard: an extra must never fire against a

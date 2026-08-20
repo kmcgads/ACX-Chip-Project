@@ -11,7 +11,9 @@ import unittest
 from pathlib import Path
 
 from chiphealth import calibration
-from chiphealth.calibration import Calibration
+from chiphealth.calibration import Calibration, as_corners
+
+from . import not_none
 
 FRAME = (1920, 1080)
 GOOD = [(100.0, 80.0), (1500.0, 90.0), (1495.0, 1000.0), (105.0, 995.0)]
@@ -70,7 +72,7 @@ class TestCache(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "calibration.json"
-        self.cal = Calibration(corners_px=tuple(tuple(p) for p in GOOD),
+        self.cal = Calibration(corners_px=as_corners(GOOD),
                                frame_size=FRAME, px_per_electrode=(10.9, 7.1),
                                created="2026-08-07T12:00:00+00:00",
                                chip_id="chip-A")
@@ -80,7 +82,8 @@ class TestCache(unittest.TestCase):
 
     def test_round_trip(self):
         calibration.save_cache(self.path, self.cal)
-        again = calibration.load_cache(self.path)
+        again = not_none(calibration.load_cache(self.path),
+                         "the cache we just saved did not load back")
         self.assertEqual(again.corners_px, self.cal.corners_px)
         self.assertEqual(again.frame_size, self.cal.frame_size)
         self.assertEqual(again.px_per_electrode, self.cal.px_per_electrode)

@@ -41,6 +41,21 @@ def controller(armed=False, allow_violations=False, rows=ROWS, cols=COLS):
     return chip
 
 
+def fake_backend(chip) -> FakeBackend:
+    """The fake this controller was built with, typed so `.calls` is visible.
+
+    `ChipController.backend` is declared as the `Backend` protocol, which has
+    no `.calls` -- that is the fake's call recorder, and it should stay off the
+    protocol rather than be added to it for the tests' convenience. Narrowing
+    here also checks the thing the assertion below depends on: that this really
+    is the fake and not a real rig.
+    """
+    be = chip.backend
+    if not isinstance(be, FakeBackend):
+        raise AssertionError(f"expected a FakeBackend, got {type(be).__name__}")
+    return be
+
+
 class TestMeasure(unittest.TestCase):
 
     def test_a_drop_inside_the_array_is_clear(self):
@@ -139,10 +154,11 @@ class TestActivateIsGated(unittest.TestCase):
     def test_nothing_is_sent_when_it_refuses(self):
         """'Stop', not 'stop after'. The DLL must not see the frame."""
         chip = controller(armed=True)
-        before = len(chip.backend.calls)
+        be = fake_backend(chip)
+        before = len(be.calls)
         with self.assertRaises(ClearanceViolation):
             chip.activate([Drop(20, 20, -3, 10)])
-        self.assertEqual(len(chip.backend.calls), before)
+        self.assertEqual(len(be.calls), before)
         self.assertEqual(chip.frames_sent, 0)
 
     def test_a_dry_run_is_gated_too(self):

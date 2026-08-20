@@ -7,6 +7,7 @@ corrupting the stack at runtime (docs/spec/design.md §7).
 
 import ctypes
 import unittest
+from typing import Any, Sequence, cast
 
 from chiphealth.actuation import (ArmingError, ChipController, ChipError, Drop,
                                   FakeBackend, N_RAILS, REQUIRED_EXPORTS,
@@ -30,12 +31,16 @@ class TestAbiContract(unittest.TestCase):
 
     def test_drop_field_order(self):
         """(height, width, row, col) -- NOT the order the vendor PDF documents."""
-        self.assertEqual([n for n, _ in Drop._fields_],
+        # Index rather than unpack: ctypes types _fields_ entries as either
+        # 2- or 3-tuples (the 3rd being a bitfield width), so `for n, _ in`
+        # is not a valid unpack for the declared type even though every
+        # entry here is a pair.
+        self.assertEqual([f[0] for f in Drop._fields_],
                          ["height", "width", "row", "col"])
 
     def test_drop_field_types(self):
-        for _, t in Drop._fields_:
-            self.assertIs(t, ctypes.c_int)
+        for f in Drop._fields_:
+            self.assertIs(f[1], ctypes.c_int)
 
     def test_drop_positional_construction_matches_legacy_scripts(self):
         """cleanup.py and 1pixsplit.py both build Drop(h, w, row, col)."""
@@ -256,6 +261,21 @@ class TestVoltageSequenceMatchesLegacy(unittest.TestCase):
     The interactive scripts issue the identical calls in the identical order.
     """
 
+    @staticmethod
+    def recorded(be, name) -> Sequence[Any]:
+        """The payload FakeBackend recorded for `name`, narrowed to a sequence.
+
+        `FakeBackend.calls` is `list[tuple[str, object]]` -- deliberately, the
+        payload differs per call (a rail tuple here, a list of drop tuples
+        there). Narrowing in one place keeps the assertions below checkable
+        and fails loudly if the recorded shape ever changes.
+        """
+        payload = next(a for n, a in be.calls if n == name)
+        if not isinstance(payload, (list, tuple)):
+            raise AssertionError(
+                f"{name} payload is {type(payload).__name__}, not a sequence")
+        return payload
+
     def calls(self, **kw):
         be = FakeBackend(rows=ROWS, cols=COLS)
         chip = controller(armed=True, backend=be, **kw)
@@ -277,7 +297,7 @@ class TestVoltageSequenceMatchesLegacy(unittest.TestCase):
 
     def test_all_nine_rails_reach_the_backend_in_order(self):
         be, _ = self.calls()
-        volts = next(a for n, a in be.calls if n == "SetVolt")
+        volts = self.recorded(be, "SetVolt")
         self.assertEqual(list(volts), [45, 45, 45, 0, 0, 0, 0, 0, 0])
 
     def test_rail_three_is_commanded_like_the_other_two(self):
@@ -289,7 +309,7 @@ class TestVoltageSequenceMatchesLegacy(unittest.TestCase):
         armed attempt on 2026-08-10, so this pins that we command it normally.
         """
         be, _ = self.calls()
-        volts = next(a for n, a in be.calls if n == "SetVolt")
+        volts = self.recorded(be, "SetVolt")
         self.assertEqual(volts[0], volts[1])
         self.assertEqual(volts[1], volts[2])
 
@@ -318,16 +338,21 @@ class TestRealBackendMarshalling(unittest.TestCase):
     def backend(self):
         rb = RealBackend.__new__(RealBackend)        # skip the CDLL load
         rb.dll_path = "<stub>"
-        rb.lib = self.StubLib()
-        return rb
+        stub = self.StubLib()
+        # Deliberately not a CDLL -- that is the point of the stub. Returned
+        # alongside so the assertions read `stub.calls` directly: `rb.lib` is
+        # declared CDLL, whose __getattr__ yields a function pointer, so
+        # `rb.lib.calls` resolves to the wrong thing for a type checker.
+        rb.lib = cast(Any, stub)
+        return rb, stub
 
     def test_set_volt_sends_nine_plain_python_ints(self):
         """chipsetup.py:41 passes 45,45,45,0,0,0,0,0,0 positionally with no
         argtypes declared, so ctypes marshals each as a C int. Wrapping them in
         anything else, or passing an array, changes what lands on the stack."""
-        rb = self.backend()
+        rb, stub = self.backend()
         rb.set_volt((45, 45, 45, 0, 0, 0, 0, 0, 0))
-        name, args = rb.lib.calls[-1]
+        name, args = stub.calls[-1]
         self.assertEqual(name, "SetVolt")
         self.assertEqual(len(args), 9, "SetVolt takes 9 separate args, not an array")
         self.assertEqual(list(args), [45, 45, 45, 0, 0, 0, 0, 0, 0])
@@ -338,9 +363,9 @@ class TestRealBackendMarshalling(unittest.TestCase):
         """An earlier version pinned SetPower as c_bool, sending one byte where
         the working scripts send four. chipsetup.py:37 passes True with no
         argtypes, which ctypes marshals as a 4-byte C int."""
-        rb = self.backend()
+        rb, stub = self.backend()
         rb.set_power(True)
-        _, args = rb.lib.calls[-1]
+        _, args = stub.calls[-1]
         self.assertEqual(len(args), 1)
         self.assertIs(type(args[0]), int)
         self.assertEqual(args[0], 1)
@@ -348,9 +373,9 @@ class TestRealBackendMarshalling(unittest.TestCase):
     def test_inquire_volt_sends_nine_separate_pointers(self):
         """analysis §2: 9 output int* pointers, matching the legacy
         InquireVolt(byref(v1)...byref(v9)) -- not one pointer to an array."""
-        rb = self.backend()
+        rb, stub = self.backend()
         rb.inquire_volt()
-        name, args = rb.lib.calls[-1]
+        name, args = stub.calls[-1]
         self.assertEqual(name, "InquireVolt")
         self.assertEqual(len(args), 9)
         # byref() yields a CArgObject, not a _Pointer. What matters is that

@@ -1,11 +1,14 @@
 """Electrode <-> pixel mapping tests. numpy only, no OpenCV."""
 
 import unittest
+from typing import TypedDict
 
 import numpy as np
 
 from chiphealth import geometry
 from chiphealth.geometry import ElectrodeFrame
+
+from . import not_none
 
 ROWS = COLS = 128
 
@@ -98,11 +101,34 @@ class TestElectrodeFrame(unittest.TestCase):
             ElectrodeFrame.from_corners(CORNERS[:3], ROWS, COLS)
 
 
+class _Expected(TypedDict):
+    """Keeps the per-key types through ``**EXPECTED``.
+
+    As a plain dict literal this is inferred ``dict[str, float]`` -- the join of
+    the int and float values -- so unpacking it handed ``float`` to the four
+    ``int`` parameters and produced twenty errors about arguments the tests
+    were never actually passing. The values below are and always were ints;
+    only the inference was lossy. ``expected_row``/``col``/``h``/``w`` are
+    genuinely integers: they describe the commanded ``Drop``, whose fields are
+    ints. The *observed* centroid is deliberately fractional, and is a separate
+    parameter.
+    """
+
+    expected_row: int
+    expected_col: int
+    expected_h: int
+    expected_w: int
+    centroid_tol_electrodes: float
+    area_tol_frac: float
+
+
 class TestRegistrationCheck(unittest.TestCase):
     """The free guard: the initial droplet is at a known place and size."""
 
-    EXPECTED = dict(expected_row=2, expected_col=5, expected_h=20, expected_w=20,
-                    centroid_tol_electrodes=4.0, area_tol_frac=0.5)
+    EXPECTED: _Expected = {
+        "expected_row": 2, "expected_col": 5,
+        "expected_h": 20, "expected_w": 20,
+        "centroid_tol_electrodes": 4.0, "area_tol_frac": 0.5}
 
     def test_correct_registration_passes(self):
         res = geometry.check_registration((11.5, 14.5), 400.0, **self.EXPECTED)
@@ -158,10 +184,14 @@ class TestPhysicalUnits(unittest.TestCase):
         self.assertIsNone(geometry.droplet_volume_nl(1, self.PITCH, None))
 
     def test_volume_with_a_gap(self):
+        # Returns None only when the gap is unknown; a gap is supplied here, so
+        # not_none also pins that supplying one actually produces a figure.
         self.assertAlmostEqual(
-            geometry.droplet_volume_nl(1, self.PITCH, 100.0), 6.075, delta=0.01)
+            not_none(geometry.droplet_volume_nl(1, self.PITCH, 100.0)),
+            6.075, delta=0.01)
         self.assertAlmostEqual(
-            geometry.droplet_volume_nl(25, self.PITCH, 100.0), 151.9, delta=0.5)
+            not_none(geometry.droplet_volume_nl(25, self.PITCH, 100.0)),
+            151.9, delta=0.5)
 
     def test_bad_gap_rejected(self):
         with self.assertRaises(ValueError):
@@ -173,7 +203,10 @@ class TestPitchIsWiredIntoConfig(unittest.TestCase):
     def test_config_carries_the_resolved_pitch(self):
         from chiphealth.config import ChipConfig
         c = ChipConfig()
-        self.assertAlmostEqual(c.pitch_um, 246.48, places=2)
+        # pitch_um is declared `float | None` because size_mm() branches on an
+        # unknown pitch. It is not unknown -- resolved 2026-08-10 -- and this
+        # asserts it is still wired in.
+        self.assertAlmostEqual(not_none(c.pitch_um), 246.48, places=2)
         self.assertAlmostEqual(c.grid_width_mm, 31.55, places=2)
 
     def test_gap_remains_unknown(self):
@@ -184,5 +217,5 @@ class TestPitchIsWiredIntoConfig(unittest.TestCase):
         """Guards against the two numbers drifting apart in edits."""
         from chiphealth.config import ChipConfig
         c = ChipConfig()
-        self.assertAlmostEqual(c.pitch_um, c.grid_width_mm * 1000.0 / c.cols,
-                               places=2)
+        self.assertAlmostEqual(not_none(c.pitch_um),
+                               c.grid_width_mm * 1000.0 / c.cols, places=2)
