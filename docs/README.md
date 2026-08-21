@@ -36,6 +36,16 @@ Guides describe how the code works **now**. Spec documents record what was
 **intended** and when. Where the two disagree, the guides and the code are
 authoritative and the spec should be read as history.
 
+## Reference
+
+Verbatim extracts from `workspace/analysis.md`, filed so they can be cited
+without reading the whole log. These are **copies, not sources** — the analysis
+log remains authoritative, and these are never edited in place.
+
+| Document | Contents |
+|---|---|
+| [reference/axis-motion-stage.md](reference/axis-motion-stage.md) | `MCDLL_NET.dll` — analysis §15 and §22. The deferred axis subsystem: 232 exports, WinPcap transport, the disassembled discovery path, and the candidate mechanism for its ~56% init failure rate |
+
 ## Related
 
 - [Root README](../README.md) — installation, usage, configuration
