@@ -1,35 +1,60 @@
 """
 symmovressplit.py — split, move, and merge back into a growing reservoir.
 
-⚠ NOT CONFIRMED ON HARDWARE. No part of this sequence has been run.
+✅ CONFIRMED ON HARDWARE 2026-08-21. The full sequence ran live and completed:
+all four splits, all four transits, and ALL THREE MERGES, down to the final 5x5
+piece. Operator-confirmed at every gate. This is the FIRST merge sequence this
+repository has ever confirmed on a chip.
 
-⚠⚠ THE MERGE STEPS ARE MUCH LESS PROVEN THAN THE SPLIT STEPS. This is the most
-important thing on this page and it is not a formality:
+⚠ ONE RUN. n = 1, and this repo has been burned by exactly that: the 8-piece
+tree was labelled "VERIFIED WORKING ON HARDWARE" on 2026-08-13 and the
+identical script failed to separate on 2026-08-17, four days later, at which
+point the label was withdrawn. Treat this as one confirmed run, not as a
+reproducibility claim. A second successful run is what would make it one.
+Record the chip id with the run (CONTRIBUTING.md#labelling-hardware-verification
+asks for it and it is not captured here yet).
 
+WHAT THE RUN DID AND DID NOT ESTABLISH
+======================================
+The distinction matters more than usual here, because a camera-free run can
+confirm a sequence completed without confirming what the liquid did.
+
+    ESTABLISHED    The mechanics work end to end. Three merges into a growing
+                   reservoir -- something with no implementation, no tests and
+                   no precedent in this repo beyond three equal pieces meeting
+                   at a point -- produced an operator-confirmed result. The
+                   commanded-area approximation (360 for 350, 380 for 375) did
+                   not prevent it.
+    NOT ESTABLISHED
+                   That the merges COALESCED rather than leaving adjacent
+                   bodies. That the reservoir holds 350 then 375 electrodes of
+                   liquid. That nothing was shed in transit. All three are
+                   unobservable without readback or a camera, and remain so
+                   after a perfect run -- they are limits of the instrument,
+                   not doubts about the sequence.
+
+WHERE THE MERGE STEPS NOW STAND
+===============================
     SPLITTING          `microdrop.splitplan.split_frames`, 1,096 lines and 86
                        tests, symmetry checked on EVERY frame, volume equality
                        computed. A 20x20 tree separated on hardware 2026-08-13
                        (and then failed to reproduce on 08-17).
     MOVING             `basics/dropsplitoff.py` step 4 and
                        `basics/mdmixwithmerge.py` move_pieces_to_meet(). Both
-                       ran on hardware. Reused here verbatim in mechanic.
-    MERGING            NO implementation anywhere in `microdrop/`. NO tests.
-                       No planner support of any kind. The only precedent is
-                       ~6 lines of procedural code in mdmixwithmerge.py, and
-                       what it does there is merge THREE EQUAL PIECES AT ONE
-                       POINT. Merging into a larger, growing body has never
-                       been done on this rig.
+                       ran on hardware, and now so has this reuse of them.
+    MERGING            Ran on hardware 2026-08-21 -- but STILL no
+                       implementation in `microdrop/`, STILL no tests, STILL no
+                       planner support. The behaviour is now evidenced; the
+                       CODE is not. A regression here would be caught by an
+                       operator's eye at the rig and by nothing else.
 
-Two further honesty notes about the merges specifically:
-
-  * THEY ARE THE HARDEST STEP TO GATE. After a split an operator can count
-    pieces. After a merge, "did these actually coalesce, or are they merely
-    adjacent?" is a much weaker judgement by eye -- and there is no
-    per-electrode readback and no camera in this package. A confident "y" at a
-    merge gate is worth less than a confident "y" at a split gate.
-  * THE COMMANDED AREA DOES NOT MATCH THE LIQUID after the second merge. See
-    "MERGE ARITHMETIC" below. That is a deliberate, accepted approximation,
-    not an oversight.
+  * MERGES REMAIN THE HARDEST STEP TO GATE, and a successful run does not
+    change that. After a split an operator can count pieces. After a merge,
+    "did these actually coalesce, or are they merely adjacent?" is a weaker
+    judgement by eye, with no readback and no camera. Keep looking hard.
+  * THE COMMANDED AREA DOES NOT MATCH THE LIQUID after merges 2 and 3. See
+    "MERGE ARITHMETIC" below. A deliberate, accepted approximation -- and one
+    the 2026-08-21 run suggests is tolerable in practice.
 
 ⚠ ALWAYS ARMED. There is no dry run. Opening the chip issues SetPower and
 SetVolt, so THE RAILS COME UP BEFORE THE FIRST GATE IS ASKED. `--arm` is
@@ -473,17 +498,19 @@ GATE = {
     "split 2 (H): 20x10 -> two 10x10": "TWO 10x10 pieces, fully separated?",
     "MERGE 1: reservoir absorbs A1":
         "Has A1 COALESCED into the reservoir -- one body, not two touching "
-        "pieces -- and has A2 moved right? (This is the least-verified step "
-        "in the run; look hard before answering y.)",
+        "pieces -- and has A2 moved right? (This worked on 2026-08-21, but "
+        "coalesced-vs-adjacent is the hardest call in the run to make by eye. "
+        "Look hard before answering y.)",
     "split 3 (W): 10x10 -> two 10x5": "TWO 10x5 pieces, fully separated?",
     "MERGE 2: reservoir absorbs B1":
-        "Has B1 COALESCED into the reservoir, and B2 moved right? (Again: the "
-        "merge is the weakest claim this run makes.)",
+        "Has B1 COALESCED into the reservoir, and B2 moved right? (Same call "
+        "as merge 1, and the reservoir is now commanded slightly larger than "
+        "its contents.)",
     "split 4 (H): 10x5 -> two 5x5": "TWO 5x5 pieces, fully separated? These "
                                     "are the smallest pieces in the run.",
     "MERGE 3: reservoir absorbs C1":
-        "Has C1 COALESCED into the reservoir, and C2 moved LEFT? (Third merge, "
-        "same weakest-claim caveat -- and note C2 moves left here, not right.)",
+        "Has C1 COALESCED into the reservoir, and C2 moved LEFT? (Note C2 "
+        "moves left here, not right -- the only transit that does.)",
 }
 
 
@@ -493,8 +520,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Split a 20x20 into a reservoir and pieces, move pieces "
                     "right, and merge two of them back into the reservoir. "
-                    "NOT confirmed on hardware; THE MERGE STEPS ARE MUCH LESS "
-                    "PROVEN THAN THE SPLITS. ALWAYS ARMED: running this "
+                    "Confirmed on hardware 2026-08-21 (one run). The merge "
+                    "steps have run, but still have no implementation or "
+                    "tests in microdrop/. ALWAYS ARMED: running this "
                     "energises the chip.")
     ap.add_argument("--arm", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -503,16 +531,17 @@ def main() -> int:
     phases, reservoir, far_piece = build_sequence(sp)
     total = check_geometry(phases, reservoir, far_piece)
 
-    banner("SPLIT / MOVE / MERGE — NOT CONFIRMED ON HARDWARE")
+    banner("SPLIT / MOVE / MERGE — CONFIRMED ON HARDWARE 2026-08-21 (n=1)")
     if args.arm:
         say("Note", "--arm is accepted but not needed; always armed.")
     for name, kind, frames, note in phases:
         say(kind.upper()[:6], f"{name}  ({len(frames)} frames) — {note}")
     say("Plan", f"{total} frames, ~{total * STEP_DELAY_S:.0f}s of dwell at "
                 f"{STEP_DELAY_S}s")
-    say("WARN", "the two MERGE phases have no tested implementation behind them "
-             "and no way to verify by eye that liquid coalesced. See the "
-             "module docstring.")
+    say("Note", "the three MERGE phases completed live on 2026-08-21. They "
+                "still have no tested implementation behind them, and "
+                "coalesced-vs-adjacent remains unverifiable by eye. See the "
+                "module docstring.")
 
     cfg = ChipConfig()
     backend = make_backend("auto", DEFAULT_DLL_DIR, DEFAULT_DLL_NAME,
@@ -574,12 +603,16 @@ def main() -> int:
     print(f"  far piece {far_piece[0]}x{far_piece[1]} at row {far_piece[2]}, "
           f"col {far_piece[3]}")
     print("\n  NOT VERIFIED THIS RUN:")
-    print("    - that either merge actually coalesced rather than leaving two")
-    print("      touching bodies. No readback, no camera; the gate was an eye.")
-    print("    - that the reservoir contains 350 electrodes of liquid. That is")
+    print("    These are limits of a camera-free rig, not doubts about the")
+    print("    sequence. They stayed true on 2026-08-21, when it completed.")
+    print("    - that any of the three merges actually coalesced rather than")
+    print("      leaving touching bodies. No readback, no camera; a gate is an eye.")
+    print("    - that the reservoir contains 375 electrodes of liquid. That is")
     print("      arithmetic from the plan, not a measurement.")
     print("    - that nothing was shed in transit. 400 electrodes went in;")
     print("      whether 400 came out is unobservable here.")
+    print("    - that this reproduces. One confirmed run, 2026-08-21. The")
+    print("      8-piece tree was confirmed once and failed four days later.")
     for q, a in log:
         print(f"    gate: {a:3s}  {q[:70]}")
     print()

@@ -18,6 +18,25 @@ per-electrode readback.
 | `protocol.py` | `SplitSession` — drives a plan on hardware with operator gates. Also the general-purpose CLI. |
 | `run_8piece_split.py` | Fixed-configuration runner: 8 pieces of 10×5. |
 | `run_16piece_split.py` | Fixed-configuration runner: 16 pieces of 5×5. |
+| `workingressplit.py` | Split / move / **merge** — 3 splits, 2 merges into a growing reservoir. Every frame ran on hardware 2026-08-21 as a prefix of the run below; stopping at that point has not itself been run. |
+| [`testing/`](testing/) | Experimental runners, below. |
+
+## `testing/`
+
+Scripts for geometries being investigated rather than relied on. Same
+conventions as the runners above — armed-only, `check_geometry()` guard,
+operator gates — but each is an experiment.
+
+| File | Status |
+|---|---|
+| `testing/symmovressplit.py` | Split / move / merge, 4 splits and **3 merges** into a growing reservoir. ✅ **Confirmed on hardware 2026-08-21** — the first merge sequence this repo has confirmed. One run; see the header on why that is not yet a reproducibility claim. |
+| `testing/6pixsplit.py` | 6×6 → four 3×3, the smallest pieces planned here. Three live runs have failed to separate; the header records why more stretch is probably the wrong knob. |
+| `testing/scaleladder.py` | The same H,W tree at 20×20 / 16×16 / 12×12 / 8×8 / 6×6, to find the size at which splitting stops working. Not yet run. |
+
+> **Merging has no implementation in `microdrop/`.** It is hand-built frame
+> construction in the two reservoir scripts — no planner support, no tests. The
+> 2026-08-21 run evidences the *behaviour*; the *code* is still unguarded by
+> anything but an operator's eye.
 
 ## Usage
 
